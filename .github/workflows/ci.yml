@@ -170,28 +170,35 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.sparkle_signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          DMG_NAME: ${{ steps.dmg.outputs.dmg_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          DMG="build/${{ steps.dmg.outputs.dmg_name }}"
-          TAG="v$APP_VERSION"
-          LENGTH=$(stat -f %z "$DMG")
+          DMG_LENGTH=$(stat -f %z "build/$DMG_NAME")
           SIGNATURE=$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' build/sparkle-signature.txt)
           PUBDATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
-          ITEM="        <item>
-            <title>$APP_VERSION</title>
-            <pubDate>$PUBDATE</pubDate>
-            <sparkle:version>$BUILD_NUMBER</sparkle:version>
-            <sparkle:shortVersionString>$APP_VERSION</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <enclosure url=\"https://github.com/${{ github.repository }}/releases/download/$TAG/$(basename "$DMG")\" length=\"$LENGTH\" type=\"application/octet-stream\" sparkle:edSignature=\"$SIGNATURE\"/>
-        </item>"
-          python3 - "$ITEM" <<'PY'
-          import sys
-          item = sys.argv[1]
+          export DMG_LENGTH SIGNATURE PUBDATE
+          python3 - <<'PY'
+          import os
+          version = os.environ["APP_VERSION"]
+          build_number = os.environ["BUILD_NUMBER"]
+          url = "https://github.com/%s/releases/download/v%s/%s" % (os.environ["REPOSITORY"], version, os.environ["DMG_NAME"])
+          item = "\n".join([
+              "        <item>",
+              "            <title>%s</title>" % version,
+              "            <pubDate>%s</pubDate>" % os.environ["PUBDATE"],
+              "            <sparkle:version>%s</sparkle:version>" % build_number,
+              "            <sparkle:shortVersionString>%s</sparkle:shortVersionString>" % version,
+              "            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>",
+              '            <enclosure url="%s" length="%s" type="application/octet-stream" sparkle:edSignature="%s"/>'
+              % (url, os.environ["DMG_LENGTH"], os.environ["SIGNATURE"]),
+              "        </item>",
+          ])
           path = "appcast.xml"
           xml = open(path).read()
           marker = "    </channel>"
           assert marker in xml
           open(path, "w").write(xml.replace(marker, item + "\n" + marker, 1))
+          print(item)
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
