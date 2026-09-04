@@ -1,0 +1,141 @@
+name: relay
+
+# Builds and tests the relay on every change; deploys it to rg-forit-wingman only from main.
+#
+# The deploy job's `if:` is the ref gate from for-Common docs/patterns/deploy-dispatch-ref-gate.md:
+# the OIDC subject for an `environment:` job carries no branch, so a workflow_dispatch from a
+# feature branch would otherwise deploy straight to production.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "relay/**"
+      - ".github/workflows/relay-deploy.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "relay/**"
+      - ".github/workflows/relay-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write # OIDC for azure/login
+  contents: read
+
+concurrency:
+  group: relay-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  AZURE_RESOURCE_GROUP: rg-forit-wingman
+  FUNCTION_APP_NAME: forit-wingman-relay
+  RELAY_BASE_URL: https://forit-wingman-relay.azurewebsites.net
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Compile and run unit tests
+        run: npm test
+
+      - name: Package (production dependencies only)
+        run: |
+          npm prune --omit=dev
+          rm -f ../relay.zip
+          zip -r -q ../relay.zip dist host.json package.json node_modules
+          ls -la ../relay.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-package
+          path: relay.zip
+          retention-days: 3
+          if-no-files-found: error
+
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    needs: build
+    # REF GATE: pull requests never deploy; a workflow_dispatch from any non-default branch may build but never deploy.
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment:
+      name: production
+      url: https://forit-wingman-relay.azurewebsites.net/api/health
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: relay-package
+
+      - name: Azure login (OIDC, GitHub Actions - ForIT Wingman)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Provision infrastructure (Bicep, idempotent)
+        run: |
+          az deployment group create \
+            --name "relay-${{ github.run_number }}" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --template-file relay/infra/main.bicep \
+            --parameters \
+              functionAppName="$FUNCTION_APP_NAME" \
+              entraTenantId="${{ secrets.AZURE_TENANT_ID }}" \
+              entraClientId="${{ vars.WINGMAN_ENTRA_CLIENT_ID }}" \
+              elevenLabsVoiceId="${{ vars.WINGMAN_ELEVENLABS_VOICE_ID }}" \
+              relayVersion="${{ github.sha }}" \
+            --query "properties.provisioningState" -o tsv
+
+      - name: Deploy code (Kudu zip deploy)
+        run: |
+          az functionapp deployment source config-zip \
+            --name "$FUNCTION_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --src relay.zip \
+            --build-remote false \
+            --query "status" -o tsv
+
+      - name: Verify the live relay is this commit and has its model key
+        run: |
+          for attempt in $(seq 1 24); do
+            BODY=$(curl -s --max-time 20 "$RELAY_BASE_URL/api/health" || true)
+            VERSION=$(echo "$BODY" | jq -r '.version // empty' 2>/dev/null || true)
+            CHAT=$(echo "$BODY" | jq -r '.chatConfigured // empty' 2>/dev/null || true)
+            echo "attempt $attempt: version=${VERSION:-none} chatConfigured=${CHAT:-none}"
+            if [ "$VERSION" = "${{ github.sha }}" ] && [ "$CHAT" = "true" ]; then
+              echo "$BODY" | jq .
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::relay did not report version ${{ github.sha }} with chatConfigured=true"
+          echo "$BODY"
+          exit 1
+
+      - name: Prove the auth gate (no token → 401, never 200)
+        run: |
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST \
+            -H "content-type: application/json" -d '{"messages":[{"role":"user","content":"ping"}]}' \
+            "$RELAY_BASE_URL/api/chat")
+          echo "POST /api/chat without a token: HTTP $CODE"
+          test "$CODE" = "401"

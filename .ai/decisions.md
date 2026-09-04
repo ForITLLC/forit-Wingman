@@ -89,3 +89,40 @@ signed-in user and be scoped server-side (goal item 4).
 - The relay is observable per `for-Common/docs/patterns/service-observability-golden-standard.md`:
   health endpoint asserting KV + provider reachability, errors to the fleet sink, alert route
   `support+wingman@forit.io`.
+
+### Implementation record (2026-09-04, WO#1907-R2 "build it, no Ben ask")
+
+What was built differs from the Decision text in three places. The intent is unchanged; the record is
+kept here so the paragraphs above remain the decision as accepted and this is what exists.
+
+- **Function App is `forit-wingman-relay`**, not `wingman-func`, matching the `forit-<product>` naming of
+  the other ForIT Function Apps. Hostname `forit-wingman-relay.azurewebsites.net`. Template:
+  `relay/infra/main.bicep`; pipeline: `.github/workflows/relay-deploy.yml` (ref-gated to `main`).
+- **One Entra app registration, not two.** The public client **ForIT Wingman**
+  (`36021471-d468-4f12-9c83-e5a73f957752`, object `336b3a41-6445-4924-bd1e-7d336af47aa5`, redirect
+  `msauth.io.forit.wingman://auth`) signs the user in with PKCE. Its **id_token** (`aud` = that client id,
+  RS256 against the ForIT tenant keys) is the relay credential; a separate "Wingman API" registration
+  exposing `access_as_user` adds nothing the relay can check that the id_token does not already carry. The
+  same sign-in yields the **access token for the gateway** (`api://861db494-6d36-4d7d-83c4-39352d3e9576`,
+  delegated scopes `tools.read`, `tools.write`, admin consent granted 2026-09-04), so the app holds one
+  refresh token and two audiences.
+- **Models are the current generation:** `WINGMAN_ALLOWED_MODELS=claude-sonnet-5,claude-opus-5`,
+  `WINGMAN_DEFAULT_MODEL=claude-sonnet-5`. The Decision named `claude-sonnet-4-6` / `claude-opus-4-6`
+  from the upstream Clicky code; both are relay settings, so a model change is never an app release.
+
+Key provenance, as executed: `kv-forit-wingman` (RBAC mode, `rg-forit-wingman`, eastus) holds
+`anthropic-api-key` and `elevenlabs-api-key`, both copied by a ForIT Global Administrator through the
+`mm_run` Azure module from the `ANTHROPIC_API_KEY` and `ELEVENLABS_API_KEY` application settings of
+Function App `forit-ai-engine`; the values were never printed, pasted, or committed. **No Anthropic or
+ElevenLabs account, organisation, billing, card or top-up was created.** The relay's managed identity holds
+only *Key Vault Secrets User* on that vault.
+
+Deploy identity: Entra app **GitHub Actions - ForIT Wingman** (`fca3bde8-953a-4beb-bcce-18c7b5cb3a71`),
+federated to `ForITLLC/forit-Wingman` branch `main` and environment `production`, with *Contributor* and
+*Role Based Access Control Administrator* scoped to `rg-forit-wingman` only. GitHub holds
+`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (secrets) and `WINGMAN_ENTRA_CLIENT_ID`
+(variable). Nothing in GitHub can read the vault.
+
+Interim access rule (accepted by the Commander 2026-09-04 as phase 1, not the design): the relay refuses
+any signed-in account whose email domain is not `forit.io` (`WINGMAN_ALLOWED_EMAIL_DOMAINS`). The design is
+per-user identity pass-through on `support_*` (for-mcp WO#1908); the domain filter comes out when that lands.

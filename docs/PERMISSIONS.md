@@ -61,9 +61,18 @@ never described to the model, so the model cannot call it even if the gateway wo
    2026-09-04, not the design:** Wingman is **ForIT staff only** and the relay rejects any UPN outside
    `@forit.io`. The design is per-user identity pass-through on `support_*`; when WO#1908 lands, the UPN
    filter comes out and no Wingman code changes. Owner: for-mcp / for-Support.
-2. **No delegated scope for a native client on the gateway app.** The gateway's registration exposes app
-   roles but its OAuth flow is locked to claude.ai redirects (`server.py:320-325`). Wingman needs an
-   `access_as_user` delegated scope on `api://861db494…` with the Wingman desktop client pre-authorised.
-   Owner: for-mcp.
+2. **Delegated scopes for the native client: resolved on the Entra side, open on the gateway side.**
+   The gateway registration `api://861db494…` exposes the delegated scopes `tools.read` and `tools.write`, and
+   the **ForIT Wingman** public client (`36021471-d468-4f12-9c83-e5a73f957752`) was granted admin consent for
+   both on 2026-09-04, so the app obtains a gateway access token from its own PKCE sign-in. What remains is
+   item 4 below: the gateway does not yet honour those scopes. Owner: for-mcp.
 3. **No FL3XX tools on the gateway.** FL3XX exists only as a docs corpus (`for-FL3XX`). Flight questions run
    against the VMO-backed `forit_avops_search_flights` until FL3XX credentials exist (Ben decision).
+4. **The gateway grants every verified ForIT-tenant JWT the full tool surface.** `for-mcp/server.py` (about
+   lines 228-236) stamps `surface:full` on any bearer token that validates against the tenant, without
+   reading the caller's app roles or `scp`. So today the Viewer / Operator / Admin levels in section 2 are
+   what the gateway *will* enforce, not what it enforces. Until WO#1908 lands, the only thing that stops a
+   signed-in ForIT staff member from reaching `support_replyToTicket`, `support_deleteTicket` or the
+   provisioning tools through Wingman is the app's own static allow-list (section 3), which is why that list
+   is compiled in and not configurable. Reported to the Commander 2026-09-04 as part of WO#1908.
+   Owner: for-mcp.
