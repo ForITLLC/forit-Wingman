@@ -118,7 +118,7 @@ ElevenLabs account, organisation, billing, card or top-up was created.** The rel
 only *Key Vault Secrets User* on that vault.
 
 Deploy identity: Entra app **GitHub Actions - ForIT Wingman** (`fca3bde8-953a-4beb-bcce-18c7b5cb3a71`),
-federated to `ForITLLC/forit-Wingman` branch `main` and environment `production`, with *Contributor* and
+federated to `ForITLLC/forit-Wingman` branch `main` and environment `production` (four credentials: the plain `repo:ForITLLC/forit-Wingman:…` subjects and GitHub's id-augmented `repo:ForITLLC@225032539/forit-Wingman@1357537282:…` subjects, which is the form GitHub presents for this repo; the first deploy run failed with AADSTS700213 until the id-augmented pair was added on 2026-09-04), with *Contributor* and
 *Role Based Access Control Administrator* scoped to `rg-forit-wingman` only. GitHub holds
 `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (secrets) and `WINGMAN_ENTRA_CLIENT_ID`
 (variable). Nothing in GitHub can read the vault.
