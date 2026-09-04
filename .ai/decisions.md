@@ -1,0 +1,85 @@
+# Wingman decisions
+
+Append-only. Newest at the bottom. Each entry: context, options, decision, reasons, consequences,
+evidence (file:line in this or sibling ForIT repos at the time of writing).
+
+## 001 — Model backend: a ForIT-owned relay in the ForIT subscription, Anthropic behind it, no key on the laptop
+
+**Date:** 2026-09-04 · **Status:** accepted · **Owner:** for-Wingman · **Work order:** WO#1907 / WO#1907-R1
+
+### Context
+
+Upstream Clicky routes every model call through an unauthenticated Cloudflare Worker that holds
+the Anthropic, ElevenLabs and AssemblyAI keys (`docs/UPSTREAM-DEPENDENCIES.md` rows 1-4). Anyone
+with the Worker URL can spend the keys. Wingman must make every model call through a
+ForIT-controlled endpoint, hold no key in the app, keep the provider pluggable with Claude as the
+default, and run with no OpenAI or Gemini dependency (goal item 2). Tool calls must run as the
+signed-in user and be scoped server-side (goal item 4).
+
+### Options considered
+
+| # | Option | Verdict |
+|---|--------|---------|
+| A | Re-home `worker/` as-is on Cloudflare under a ForIT account | Rejected. Cloudflare is not ForIT platform standard (Azure first; Cloudflare infra needs Ben's approval) and the Worker has no caller authentication at all. |
+| B | Call the ForIT AI Engine (`forit-ai-engine.azurewebsites.net/api/v1/chat/completions`) | Rejected for phase 1. Its SSE is buffered, not token-by-token, by its own comment (`for-AI/platform/src/functions/openai-compat.ts:632-724`); it runs an engine-owned tool loop, so tools would execute under the engine's service identity (`for-AI/platform/src/gateway-auth.ts:1-50` mints client-credential tokens for the gateway), which defeats "every tool call runs as the signed-in user"; and it does not pass through a Messages-API body with screenshots and client-side `tool_use` blocks. Kept as a **second provider adapter** for later (see Consequences). |
+| C | Direct Anthropic from the app with a key fetched from Key Vault at runtime | Rejected. The key would sit in a laptop process; that is a god-key in the client, the exact thing goal item 4 forbids. |
+| D | **A Wingman relay: Azure Functions in the ForIT subscription, Entra-authenticated per user, Anthropic Messages API behind it with a ForIT key from Key Vault** | **Accepted.** |
+
+### Decision
+
+1. **Relay** = Azure Functions (Node 22, TypeScript) in subscription `147a19b0-f6a7-4b0b-89e9-49f4aabd1435`,
+   resource group `rg-forit-wingman`, app `wingman-func`, Key Vault `kv-forit-wingman`, read-only managed
+   identity resolving `@Microsoft.KeyVault(SecretUri=…)` app settings. This follows
+   `for-Common/docs/adding-a-new-app.md:436-438` (own RG per product) and
+   `for-Common/docs/patterns/product-secret-provisioning.md:7-24` (secret lives in KV and process memory only).
+   The relay source lives in this repo under `relay/` and replaces `worker/`.
+2. **Routes**
+   - `POST /api/chat` — validates the caller's Entra access token for Wingman's own API app registration
+     (tenant `c0efa09e-4bda-4a9d-a177-4c77076b7f76`; audience `api://<wingman-app-id>`; `rejectGuests`),
+     then forwards the Messages-API body to the selected provider and streams the SSE back unchanged.
+     Provider is selected by `WINGMAN_MODEL_PROVIDER` (`anthropic` default; `engine` adapter reserved for
+     option B). The signed-in user's UPN is logged per request and forwarded as `X-ForIT-User` for attribution.
+   - `POST /api/tts` — ElevenLabs behind the same auth, enabled only if `elevenlabs-api-key` exists in
+     `kv-forit-wingman`. ForIT already holds an ElevenLabs key in the AI Engine's settings
+     (`for-AI/platform/src/functions/voice.ts:38-82`), so this is a reuse, not a new vendor.
+   - No `/transcribe-token`. AssemblyAI is not a ForIT vendor and a new signup is out of scope; speech-to-text
+     is on-device Apple Speech (`AppleSpeechTranscriptionProvider.swift`, already in tree). ElevenLabs TTS
+     falls back to on-device `AVSpeechSynthesizer` when the relay reports TTS disabled.
+3. **Tool calls do not go through the relay.** The app is the MCP client and calls the for-mcp gateway
+   (`for-mcp.graycoast-522b9cfd.eastus.azurecontainerapps.io/mcp`, Streamable HTTP) with the user's own
+   delegated Entra token for the gateway's API (`api://861db494-6d36-4d7d-83c4-39352d3e9576`). The gateway
+   already validates that token, maps app roles to `tools.read/write/admin` and audit-logs the human
+   (`for-mcp/server.py:200-241`, `:592-606`). Per-user tenant scoping of `support_*` is a gateway/Support gap
+   reported to the Commander, not worked around in the app (see `docs/PERMISSIONS.md`).
+4. **Model** default `claude-sonnet-4-6`, optional `claude-opus-4-6`, both selectable in the panel as upstream;
+   provider names never leak into the UI.
+5. `OpenAIAPI.swift` and `OpenAIAudioTranscriptionProvider.swift` are deleted; there is no OpenAI or Gemini
+   code path.
+
+### Reasons
+
+- Only option D keeps all four properties at once: ForIT-controlled endpoint, no key on the laptop,
+  true token streaming with vision and `tool_use`, and tool execution under the user's identity.
+- The relay is a thin passthrough, so provider swaps are a server change with no app release.
+- The relay is the app-owned "chat proxy that runs the app's own auth check" that the ForIT AI tier
+  standard requires for any human-facing AI surface (`for-Common/docs/AI-START-HERE.md:104-148`).
+  The deviation is that the provider key sits in `kv-forit-wingman` instead of the AI Engine, because
+  the Engine cannot yet stream or pass through client tool use. Revisit when
+  `openai-compat.ts` gains a real token stream and a passthrough mode; the `engine` provider adapter
+  is the migration path.
+
+### Consequences
+
+- New Azure resources: `rg-forit-wingman`, `wingman-func` (consumption plan), `kv-forit-wingman`,
+  storage account, App Insights. Provisioned by the deploy workflow with the OIDC deploy identity.
+- Secret to provision: `anthropic-api-key` in `kv-forit-wingman` (a ForIT Anthropic key; the AI Engine's
+  copy lives in its Function App settings and the KV copy there is stale —
+  `for-AI/docs/plans/2026-07-27-keyvault-migration-plan.md:41-44`). Provisioning is a pipeline step from
+  1Password, never a portal paste. Optional: `elevenlabs-api-key`.
+- Two Entra app registrations are needed: Wingman API (exposes `access_as_user`) and Wingman desktop
+  public client (PKCE, redirect `msauth.io.forit.wingman://auth`). Both are ForIT-tenant, guests rejected.
+  The desktop client must also be pre-authorised on the gateway API `861db494…` for a delegated scope —
+  a for-mcp item, reported.
+- The relay is observable per `for-Common/docs/patterns/service-observability-golden-standard.md`:
+  health endpoint asserting KV + provider reachability, errors to the fleet sink, alert route
+  `support+wingman@forit.io`.
