@@ -1,0 +1,16 @@
+Wingman
+Copyright (c) 2026 ForIT LLC
+
+This product is derived from Clicky (https://github.com/farzaa/clicky),
+Copyright (c) 2026 Farza, released under the MIT License. The original
+license text is preserved in the LICENSE file at the root of this repository
+and continues to apply to the portions of the code that originate there.
+
+Third-party components distributed with the application:
+
+  Sparkle (https://github.com/sparkle-project/Sparkle)
+    Copyright (c) 2006-2013 Andy Matuschak and contributors
+    Copyright (c) 2011-2014 Sparkle Project contributors
+    MIT License.
+
+Trademarks and names of upstream authors are used only for attribution.
