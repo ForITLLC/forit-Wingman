@@ -1,22 +1,63 @@
 //
 //  ClaudeAPI.swift
-//  Claude API Implementation with streaming support
+//  Streaming chat client for the ForIT relay
+//
+//  Sends Anthropic Messages-API bodies to the relay's /api/chat, which validates the
+//  caller's ForIT sign-in, attaches ForIT's key, and streams the SSE back unchanged.
+//  The app never holds a vendor key and never talks to the vendor directly.
 //
 
 import Foundation
 
-/// Claude API helper with streaming for progressive text display.
+enum WingmanRelayError: LocalizedError {
+    /// 401 from the relay: the id_token was missing, expired, or not a ForIT account.
+    case notAuthorized(message: String)
+    case relayRejected(statusCode: Int, message: String)
+    case invalidResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .notAuthorized(let message):
+            return "The Wingman relay did not accept your sign-in: \(message)"
+        case .relayRejected(let statusCode, let message):
+            return "The Wingman relay refused the request (\(statusCode)): \(message)"
+        case .invalidResponse:
+            return "The Wingman relay returned an invalid response."
+        }
+    }
+
+    var isNotAuthorized: Bool {
+        if case .notAuthorized = self {
+            return true
+        }
+        return false
+    }
+
+    /// The relay answers with `{ "error": "...", "message": "..." }`; fall back to the raw body.
+    static func message(fromRelayBody body: String) -> String {
+        if let bodyData = body.data(using: .utf8),
+           let payload = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+           let message = payload["message"] as? String {
+            return message
+        }
+        return body.isEmpty ? "no details" : body
+    }
+}
+
+/// Claude chat through the relay, streamed for progressive text display.
 class ClaudeAPI {
     private static let tlsWarmupLock = NSLock()
     private static var hasStartedTLSWarmup = false
 
-    private let apiURL: URL
+    private let relayChatURL: URL
     var model: String
+    private let bearerTokenProvider: WingmanBearerTokenProvider
     private let session: URLSession
 
-    init(proxyURL: String, model: String = "claude-sonnet-4-6") {
-        self.apiURL = URL(string: proxyURL)!
+    init(relayChatURL: URL, model: String, bearerTokenProvider: @escaping WingmanBearerTokenProvider) {
+        self.relayChatURL = relayChatURL
         self.model = model
+        self.bearerTokenProvider = bearerTokenProvider
 
         // Use .default instead of .ephemeral so TLS session tickets are cached.
         // Ephemeral sessions do a full TLS handshake on every request, which causes
@@ -36,11 +77,15 @@ class ClaudeAPI {
         warmUpTLSConnectionIfNeeded()
     }
 
-    private func makeAPIRequest() -> URLRequest {
-        var request = URLRequest(url: apiURL)
+    /// Every relay call carries the signed-in user's id_token. Asking the provider here (rather
+    /// than caching a token) means a refresh happens transparently when one is due.
+    private func makeAuthorizedRequest() async throws -> URLRequest {
+        let bearerToken = try await bearerTokenProvider()
+        var request = URLRequest(url: relayChatURL)
         request.httpMethod = "POST"
         request.timeoutInterval = 120
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         return request
     }
 
@@ -61,7 +106,7 @@ class ClaudeAPI {
         return "image/jpeg"
     }
 
-    /// Sends a no-op HEAD request to the API host to establish and cache a TLS session.
+    /// Sends a no-op HEAD request to the relay host to establish and cache a TLS session.
     /// Failures are silently ignored — this is purely an optimization.
     private func warmUpTLSConnectionIfNeeded() {
         Self.tlsWarmupLock.lock()
@@ -73,12 +118,11 @@ class ClaudeAPI {
 
         guard shouldStartTLSWarmup else { return }
 
-        guard var warmupURLComponents = URLComponents(url: apiURL, resolvingAgainstBaseURL: false) else {
+        guard var warmupURLComponents = URLComponents(url: relayChatURL, resolvingAgainstBaseURL: false) else {
             return
         }
 
         // The TLS session ticket is host-scoped, so warming the root host is enough.
-        // Hitting the host instead of `/v1/messages` avoids extra endpoint-specific noise.
         warmupURLComponents.path = "/"
         warmupURLComponents.query = nil
         warmupURLComponents.fragment = nil
@@ -107,7 +151,7 @@ class ClaudeAPI {
     ) async throws -> (text: String, duration: TimeInterval) {
         let startTime = Date()
 
-        var request = makeAPIRequest()
+        var request = try await makeAuthorizedRequest()
 
         // Build messages array
         var messages: [[String: Any]] = []
@@ -150,17 +194,13 @@ class ClaudeAPI {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = bodyData
         let payloadMB = Double(bodyData.count) / 1_048_576.0
-        print("🌐 Claude streaming request: \(String(format: "%.1f", payloadMB))MB, \(images.count) image(s)")
+        print("🌐 Relay chat request: \(String(format: "%.1f", payloadMB))MB, \(images.count) image(s), model \(model)")
 
         // Use bytes streaming for SSE (Server-Sent Events)
         let (byteStream, response) = try await session.bytes(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw NSError(
-                domain: "ClaudeAPI",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid HTTP response"]
-            )
+            throw WingmanRelayError.invalidResponse
         }
 
         // If non-2xx status, read the full body as error text
@@ -169,12 +209,11 @@ class ClaudeAPI {
             for try await line in byteStream.lines {
                 errorBodyChunks.append(line)
             }
-            let errorBody = errorBodyChunks.joined(separator: "\n")
-            throw NSError(
-                domain: "ClaudeAPI",
-                code: httpResponse.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "API Error (\(httpResponse.statusCode)): \(errorBody)"]
-            )
+            let errorMessage = WingmanRelayError.message(fromRelayBody: errorBodyChunks.joined(separator: "\n"))
+            if httpResponse.statusCode == 401 {
+                throw WingmanRelayError.notAuthorized(message: errorMessage)
+            }
+            throw WingmanRelayError.relayRejected(statusCode: httpResponse.statusCode, message: errorMessage)
         }
 
         // Parse SSE stream — each event is "data: {json}\n\n"
@@ -209,83 +248,5 @@ class ClaudeAPI {
 
         let duration = Date().timeIntervalSince(startTime)
         return (text: accumulatedResponseText, duration: duration)
-    }
-
-    /// Non-streaming fallback for validation requests where we don't need progressive display.
-    func analyzeImage(
-        images: [(data: Data, label: String)],
-        systemPrompt: String,
-        conversationHistory: [(userPlaceholder: String, assistantResponse: String)] = [],
-        userPrompt: String
-    ) async throws -> (text: String, duration: TimeInterval) {
-        let startTime = Date()
-
-        var request = makeAPIRequest()
-
-        var messages: [[String: Any]] = []
-        for (userPlaceholder, assistantResponse) in conversationHistory {
-            messages.append(["role": "user", "content": userPlaceholder])
-            messages.append(["role": "assistant", "content": assistantResponse])
-        }
-
-        // Build current message with all labeled images + prompt
-        var contentBlocks: [[String: Any]] = []
-        for image in images {
-            contentBlocks.append([
-                "type": "image",
-                "source": [
-                    "type": "base64",
-                    "media_type": detectImageMediaType(for: image.data),
-                    "data": image.data.base64EncodedString()
-                ]
-            ])
-            contentBlocks.append([
-                "type": "text",
-                "text": image.label
-            ])
-        }
-        contentBlocks.append([
-            "type": "text",
-            "text": userPrompt
-        ])
-        messages.append(["role": "user", "content": contentBlocks])
-
-        let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 256,
-            "system": systemPrompt,
-            "messages": messages
-        ]
-
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
-        request.httpBody = bodyData
-        let payloadMB = Double(bodyData.count) / 1_048_576.0
-        print("🌐 Claude request: \(String(format: "%.1f", payloadMB))MB, \(images.count) image(s)")
-
-        let (data, response) = try await session.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
-            let responseString = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw NSError(
-                domain: "ClaudeAPI",
-                code: (response as? HTTPURLResponse)?.statusCode ?? -1,
-                userInfo: [NSLocalizedDescriptionKey: "API Error: \(responseString)"]
-            )
-        }
-
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let content = json?["content"] as? [[String: Any]],
-              let textBlock = content.first(where: { ($0["type"] as? String) == "text" }),
-              let text = textBlock["text"] as? String else {
-            throw NSError(
-                domain: "ClaudeAPI",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid response format"]
-            )
-        }
-
-        let duration = Date().timeIntervalSince(startTime)
-        return (text: text, duration: duration)
     }
 }

@@ -16,6 +16,9 @@ import SwiftUI
 
 extension Notification.Name {
     static let wingmanDismissPanel = Notification.Name("wingmanDismissPanel")
+    /// Posted when something outside the panel needs the user's attention there,
+    /// e.g. the hot key was pressed while no ForIT account is signed in.
+    static let wingmanShowPanel = Notification.Name("wingmanShowPanel")
 }
 
 /// Custom NSPanel subclass that can become the key window even with
@@ -30,6 +33,7 @@ final class MenuBarPanelManager: NSObject {
     private var panel: NSPanel?
     private var clickOutsideMonitor: Any?
     private var dismissPanelObserver: NSObjectProtocol?
+    private var showPanelObserver: NSObjectProtocol?
 
     private let companionManager: CompanionManager
     private let panelWidth: CGFloat = 320
@@ -47,6 +51,14 @@ final class MenuBarPanelManager: NSObject {
         ) { [weak self] _ in
             self?.hidePanel()
         }
+
+        showPanelObserver = NotificationCenter.default.addObserver(
+            forName: .wingmanShowPanel,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.showPanel()
+        }
     }
 
     deinit {
@@ -54,6 +66,9 @@ final class MenuBarPanelManager: NSObject {
             NSEvent.removeMonitor(monitor)
         }
         if let observer = dismissPanelObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = showPanelObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }

@@ -63,16 +63,23 @@ final class CompanionManager: ObservableObject {
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
-    /// Base URL for the Cloudflare Worker proxy. All API requests route
-    /// through this so keys never ship in the app binary.
-    private static let workerBaseURL = "https://your-worker-name.your-subdomain.workers.dev"
+    /// The user's ForIT sign-in. Every relay call carries its id_token; without a signed-in
+    /// account nothing is captured or sent (push-to-talk is refused in handleShortcutTransition).
+    let signInManager = WingmanEntraSignInManager()
 
     private lazy var claudeAPI: ClaudeAPI = {
-        return ClaudeAPI(proxyURL: "\(Self.workerBaseURL)/chat", model: selectedModel)
+        return ClaudeAPI(
+            relayChatURL: WingmanServiceConfiguration.relayChatURL,
+            model: selectedModel,
+            bearerTokenProvider: { [signInManager] in try await signInManager.validIdToken() }
+        )
     }()
 
     private lazy var elevenLabsTTSClient: ElevenLabsTTSClient = {
-        return ElevenLabsTTSClient(proxyURL: "\(Self.workerBaseURL)/tts")
+        return ElevenLabsTTSClient(
+            relayTTSURL: WingmanServiceConfiguration.relayTTSURL,
+            bearerTokenProvider: { [signInManager] in try await signInManager.validIdToken() }
+        )
     }()
 
     /// Conversation history so Claude remembers prior exchanges within a session.
@@ -103,7 +110,9 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var isOverlayVisible: Bool = false
 
     /// The Claude model used for voice responses. Persisted to UserDefaults.
-    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
+    @Published var selectedModel: String = WingmanServiceConfiguration.normalisedModelId(
+        UserDefaults.standard.string(forKey: "selectedClaudeModel")
+    )
 
     func setSelectedModel(_ model: String) {
         selectedModel = model
@@ -151,6 +160,9 @@ final class CompanionManager: ObservableObject {
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
+
+        // Pick the previous sign-in back up from the keychain-held refresh token.
+        Task { await signInManager.restoreSessionIfPossible() }
 
         // If the user already completed onboarding AND all permissions are
         // still granted, show the cursor overlay immediately. If permissions
@@ -391,6 +403,14 @@ final class CompanionManager: ObservableObject {
             // Don't register push-to-talk while the onboarding video is playing
             guard !showOnboardingVideo else { return }
 
+            // Nothing is captured or sent without a signed-in ForIT account. The relay would
+            // refuse the call anyway; refusing here keeps the microphone and screen untouched
+            // and opens the panel so the user sees the sign-in row.
+            guard signInManager.isSignedIn else {
+                NotificationCenter.default.post(name: .wingmanShowPanel, object: nil)
+                return
+            }
+
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
             transientHideTask = nil
@@ -626,6 +646,19 @@ final class CompanionManager: ObservableObject {
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
+            } catch let relayError as WingmanRelayError where relayError.isNotAuthorized {
+                // The relay no longer accepts this sign-in: drop it locally and send the
+                // user back to the panel instead of retrying with the same token.
+                WingmanAnalytics.trackResponseError(error: relayError.localizedDescription)
+                print("⚠️ Companion response refused by the relay: \(relayError)")
+                signInManager.handleUnauthorizedResponse()
+                speakSignInRequiredFallback()
+                NotificationCenter.default.post(name: .wingmanShowPanel, object: nil)
+            } catch let signInError as WingmanSignInError {
+                WingmanAnalytics.trackResponseError(error: signInError.localizedDescription)
+                print("⚠️ Companion response needs a sign-in: \(signInError)")
+                speakSignInRequiredFallback()
+                NotificationCenter.default.post(name: .wingmanShowPanel, object: nil)
             } catch {
                 WingmanAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
@@ -674,6 +707,15 @@ final class CompanionManager: ObservableObject {
     /// ElevenLabs is down.
     private func speakCreditsErrorFallback() {
         let utterance = "The Wingman service is not available right now. Please contact ForIT support."
+        let synthesizer = NSSpeechSynthesizer()
+        synthesizer.startSpeaking(utterance)
+        voiceState = .responding
+    }
+
+    /// Spoken when a request could not be made because no ForIT account is signed in or the
+    /// sign-in expired. Uses the system voice so it works without the relay.
+    private func speakSignInRequiredFallback() {
+        let utterance = "Sign in to Wingman with your ForIT account from the menu bar, then try again."
         let synthesizer = NSSpeechSynthesizer()
         synthesizer.startSpeaking(utterance)
         voiceState = .responding

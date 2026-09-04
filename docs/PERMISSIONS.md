@@ -61,11 +61,13 @@ never described to the model, so the model cannot call it even if the gateway wo
    2026-09-04, not the design:** Wingman is **ForIT staff only** and the relay rejects any UPN outside
    `@forit.io`. The design is per-user identity pass-through on `support_*`; when WO#1908 lands, the UPN
    filter comes out and no Wingman code changes. Owner: for-mcp / for-Support.
-2. **Delegated scopes for the native client: resolved on the Entra side, open on the gateway side.**
-   The gateway registration `api://861db494…` exposes the delegated scopes `tools.read` and `tools.write`, and
-   the **ForIT Wingman** public client (`36021471-d468-4f12-9c83-e5a73f957752`) was granted admin consent for
-   both on 2026-09-04, so the app obtains a gateway access token from its own PKCE sign-in. What remains is
-   item 4 below: the gateway does not yet honour those scopes. Owner: for-mcp.
+2. **Delegated token for the native client: RESOLVED 2026-09-04 (for-mcp WO#1908).** The gateway accepts a
+   delegated token only from an allow-listed native client; Wingman uses **ForIT-Wingman-Client** (`acc81527-1818-4c79-8f59-0bfc111701d4`)
+   and requests `api://861db494…/access_as_user` (user-consentable, pre-authorised, no consent screen). The
+   user's gateway app role (Reader / Writer / Admin) becomes `tools.read` / `tools.write` / `tools.admin` on the
+   token; no role = HTTP 403 `insufficient_scope`. The earlier **ForIT Wingman** registration (`36021471-d468-4f12-9c83-e5a73f957752`)
+   is not allow-listed and is no longer used by the app (left in Entra for a ForIT admin to delete). Recipe:
+   for-mcp `docs/native-clients.md` §3.
 3. **No FL3XX tools on the gateway.** FL3XX exists only as a docs corpus (`for-FL3XX`). Flight questions run
    against the VMO-backed `forit_avops_search_flights` until FL3XX credentials exist (Ben decision).
 4. **The gateway grants every verified ForIT-tenant JWT the full tool surface.** `for-mcp/server.py` (about
