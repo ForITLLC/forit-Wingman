@@ -28,5 +28,13 @@
             <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/ForITLLC/forit-Wingman/releases/download/v0.1.12/Wingman-0.1.12.dmg" length="1898398" type="application/octet-stream" sparkle:edSignature="8uKWaG+Q6knoTT2aQks5W1EC/E/xF4gU1xHgf22Fe7zfSVKDEmm+OIcVXr72Dp4MXXt5gKRstZ2bQHRP43UcBQ=="/>
         </item>
+        <item>
+            <title>0.1.16</title>
+            <pubDate>Fri, 04 Sep 2026 21:33:03 +0000</pubDate>
+            <sparkle:version>16</sparkle:version>
+            <sparkle:shortVersionString>0.1.16</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/ForITLLC/forit-Wingman/releases/download/v0.1.16/Wingman-0.1.16.dmg" length="2009051" type="application/octet-stream" sparkle:edSignature="aqr1O7knMhWQRvrUr5JnHOuUr/Qi/XvEsQy/JUxMP9m8TVLA+I+wJU19V0M3NDyWX2xSc5RfwnP9I1Fhk5oIAQ=="/>
+        </item>
     </channel>
 </rss>
