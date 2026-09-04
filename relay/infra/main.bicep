@@ -11,8 +11,13 @@
 
 targetScope = 'resourceGroup'
 
-@description('Region for every resource. Defaults to the resource group region (eastus).')
-param location string = resourceGroup().location
+// Compute lives in Canada Central, not in the resource group's region (eastus): on the ForIT
+// subscription the East US Microsoft.Web/serverfarms quota is exhausted (7 plans, limit reported as 0,
+// SubscriptionIsOverQuotaForSku on deploy run 33918294350), and ForIT is a Canadian company so its
+// nearest region is the better home anyway. The existing Key Vault stays in eastus; Key Vault
+// references resolve across regions.
+@description('Region for the storage account, monitoring, plan and Function App.')
+param location string = 'canadacentral'
 
 @description('Function App name. Also the hostname: <name>.azurewebsites.net')
 param functionAppName string = 'forit-wingman-relay'

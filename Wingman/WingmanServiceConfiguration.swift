@@ -14,7 +14,7 @@ enum WingmanServiceConfiguration {
     // MARK: - Entra sign-in (ForIT tenant, "ForIT Wingman" public client)
 
     static let entraTenantId = "c0efa09e-4bda-4a9d-a177-4c77076b7f76"
-    static let entraClientId = "36021471-d468-4f12-9c83-e5a73f957752"
+    static let entraClientId = "acc81527-1818-4c79-8f59-0bfc111701d4"
 
     /// Registered on the Entra app as a public-client redirect. The scheme is also declared in
     /// Info.plist (CFBundleURLTypes) so macOS routes the browser's redirect back to this app.
@@ -26,15 +26,15 @@ enum WingmanServiceConfiguration {
     static let gatewayApplicationIdURI = "api://861db494-6d36-4d7d-83c4-39352d3e9576"
 
     /// One sign-in yields both tokens the app needs: the id_token (audience = this client,
-    /// presented to the relay) and an access token for the gateway (tools.read / tools.write).
+    /// presented to the relay) and an access token for the gateway (`access_as_user`; the user's gateway
+    /// app role, Reader / Writer / Admin, decides which tools that token may call).
     /// `offline_access` is what returns the refresh token that keeps the user signed in.
     static let signInScopes: [String] = [
         "openid",
         "profile",
         "email",
         "offline_access",
-        "\(gatewayApplicationIdURI)/tools.read",
-        "\(gatewayApplicationIdURI)/tools.write",
+        "\(gatewayApplicationIdURI)/access_as_user",
     ]
 
     static var entraAuthorizeEndpoint: URL {

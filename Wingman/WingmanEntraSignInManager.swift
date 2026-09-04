@@ -5,7 +5,7 @@
 //  Signs the user in with their ForIT Microsoft account (Entra ID, authorization code + PKCE
 //  through the system browser) and hands out the two tokens the app needs:
 //    - the id_token, presented to the relay as `Authorization: Bearer` for model and speech calls;
-//    - the gateway access token (tools.read / tools.write), presented to the for-mcp gateway
+//    - the gateway access token (scope access_as_user), presented to the for-mcp gateway
 //      for tool calls.
 //  Only the refresh token is persisted (macOS Keychain); everything else lives in memory and is
 //  re-minted on launch. Sign-out wipes both.
@@ -13,6 +13,7 @@
 
 import AppKit
 import AuthenticationServices
+import Combine
 import Foundation
 
 struct WingmanSignedInAccount: Equatable {

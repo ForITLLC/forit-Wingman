@@ -14,7 +14,7 @@ The user signs in with their ForIT (Entra) account. Every relay call carries tha
 - **App Type**: Menu bar-only (`LSUIElement=true`), no dock icon or main window
 - **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
-- **Sign-in**: Microsoft Entra authorization-code + PKCE in the system browser (`WingmanEntraSignInManager.swift`), custom URL scheme `msauth.io.forit.wingman://auth`, refresh token in the login keychain. The id_token is the bearer for the relay; a gateway access token (`api://.../tools.read`) is minted for the for-mcp tools layer.
+- **Sign-in**: Microsoft Entra authorization-code + PKCE in the system browser (`WingmanEntraSignInManager.swift`), custom URL scheme `msauth.io.forit.wingman://auth`, refresh token in the login keychain. The id_token is the bearer for the relay; a gateway access token (`api://861db494-…/access_as_user`, client `acc81527-…`, see for-mcp `docs/native-clients.md`) is minted for the for-mcp tools layer.
 - **AI Chat**: Claude (Sonnet 5 default, Opus 5 optional; allow-list in `WingmanServiceConfiguration.swift`) via the ForIT relay `/api/chat` with SSE streaming
 - **Speech-to-Text**: on-device Apple Speech only (`AppleSpeechTranscriptionProvider.swift`); audio never leaves the Mac
 - **Text-to-Speech**: ElevenLabs via the relay `/api/tts`; `AVSpeechSynthesizer` on-device when the relay answers 501 (no voice configured)

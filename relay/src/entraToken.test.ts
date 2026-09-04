@@ -4,7 +4,7 @@ import { evaluateEntraClaims, EntraTokenError, type EntraJwtClaims } from "./ent
 
 const rules = {
   tenantId: "c0efa09e-4bda-4a9d-a177-4c77076b7f76",
-  clientId: "36021471-d468-4f12-9c83-e5a73f957752",
+  clientId: "acc81527-1818-4c79-8f59-0bfc111701d4",
   allowedEmailDomains: ["forit.io"],
 };
 const now = 1_800_000_000;

@@ -41,7 +41,7 @@ struct WingmanSignInTests {
         #expect(queryValue("code_challenge_method") == "S256")
         #expect(queryValue("state") == "state-value")
         #expect(queryValue("redirect_uri") == "msauth.io.forit.wingman://auth")
-        #expect(queryValue("scope")?.contains("api://861db494-6d36-4d7d-83c4-39352d3e9576/tools.read") == true)
+        #expect(queryValue("scope")?.contains("api://861db494-6d36-4d7d-83c4-39352d3e9576/access_as_user") == true)
         #expect(queryValue("scope")?.contains("offline_access") == true)
     }
 

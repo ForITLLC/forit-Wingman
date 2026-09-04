@@ -16,7 +16,7 @@ proves who is calling on every request. Decision record: `.ai/decisions.md` 001.
 ## Authentication
 
 The app signs the user in with the Entra public client **ForIT Wingman**
-(`36021471-d468-4f12-9c83-e5a73f957752`, PKCE, redirect `msauth.io.forit.wingman://auth`) and sends
+(**ForIT-Wingman-Client**, `acc81527-1818-4c79-8f59-0bfc111701d4`, PKCE, redirect `msauth.io.forit.wingman://auth`) and sends
 the id_token as `Authorization: Bearer`. `src/entraToken.ts` checks the RS256 signature against the
 ForIT tenant keys, the audience (that client id), the validity window, and that the account's email
 domain is on `WINGMAN_ALLOWED_EMAIL_DOMAINS` (`forit.io` for now; see `docs/PERMISSIONS.md` 5.1).
