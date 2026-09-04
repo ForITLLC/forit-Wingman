@@ -73,3 +73,130 @@ test("an unresolved Key Vault reference is treated as no key, never sent upstrea
   assert.deepEqual(config.allowedEmailDomains, ["forit.io"]);
   assert.equal(config.defaultModel, "claude-sonnet-5");
 });
+
+test("tool definitions and a tool round trip are forwarded unchanged", () => {
+  const anthropicRequest = buildAnthropicRequest(
+    {
+      tools: [
+        {
+          name: "support_listTickets",
+          description: "List tickets.",
+          input_schema: { type: "object", properties: { tenant: { type: "string" } } },
+        },
+      ],
+      tool_choice: { type: "auto" },
+      messages: [
+        { role: "user", content: "what is open for great north?" },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "let me look." },
+            { type: "tool_use", id: "toolu_01", name: "support_listTickets", input: { tenant: "gna", status: "active" } },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_01", content: '{"tickets":[]}' }],
+        },
+      ],
+    },
+    modelConfig,
+  );
+  assert.equal(anthropicRequest.tools?.length, 1);
+  assert.equal(anthropicRequest.tools?.[0].name, "support_listTickets");
+  assert.deepEqual(anthropicRequest.tool_choice, { type: "auto" });
+  assert.equal(anthropicRequest.messages.length, 3);
+});
+
+test("a tool_use block in a user turn and a tool_result in an assistant turn are refused", () => {
+  assert.throws(
+    () =>
+      buildAnthropicRequest(
+        {
+          messages: [
+            { role: "user", content: [{ type: "tool_use", id: "toolu_01", name: "support_listTickets", input: {} }] },
+          ],
+        },
+        modelConfig,
+      ),
+    /tool_use blocks belong to assistant turns/,
+  );
+  assert.throws(
+    () =>
+      buildAnthropicRequest(
+        {
+          messages: [
+            { role: "user", content: "hi" },
+            { role: "assistant", content: [{ type: "tool_result", tool_use_id: "toolu_01", content: "x" }] },
+            { role: "user", content: "and?" },
+          ],
+        },
+        modelConfig,
+      ),
+    /tool_result blocks belong to user turns/,
+  );
+});
+
+test("tool definitions must be well formed and tool_choice must name a known tool", () => {
+  assert.throws(
+    () =>
+      buildAnthropicRequest(
+        { tools: [{ name: "bad name!", input_schema: { type: "object" } }], messages: [{ role: "user", content: "hi" }] },
+        modelConfig,
+      ),
+    /name must match/,
+  );
+  assert.throws(
+    () =>
+      buildAnthropicRequest(
+        { tools: [{ name: "support_listTickets", input_schema: { type: "array" } as never }], messages: [{ role: "user", content: "hi" }] },
+        modelConfig,
+      ),
+    /input_schema must be a JSON schema of type object/,
+  );
+  assert.throws(
+    () =>
+      buildAnthropicRequest(
+        {
+          tools: [{ name: "support_listTickets", input_schema: { type: "object" } }],
+          tool_choice: { type: "tool", name: "support_deleteTicket" },
+          messages: [{ role: "user", content: "hi" }],
+        },
+        modelConfig,
+      ),
+    /not in tools/,
+  );
+  assert.throws(
+    () => buildAnthropicRequest({ tool_choice: { type: "auto" }, messages: [{ role: "user", content: "hi" }] }, modelConfig),
+    /tool_choice requires tools/,
+  );
+});
+
+test("an oversized tool_result is refused before reaching the vendor", () => {
+  assert.throws(
+    () =>
+      buildAnthropicRequest(
+        {
+          messages: [
+            { role: "user", content: "hi" },
+            { role: "assistant", content: [{ type: "tool_use", id: "toolu_01", name: "support_listTickets", input: {} }] },
+            { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content: "x".repeat(64 * 1024 + 1) }] },
+          ],
+        },
+        modelConfig,
+      ),
+    /exceeds the relay size limit/,
+  );
+});
+
+test("tool_choice none is accepted so the app can force a spoken answer after the tool cap", () => {
+  const anthropicRequest = buildAnthropicRequest(
+    {
+      tools: [{ name: "support_listTickets", input_schema: { type: "object" } }],
+      tool_choice: { type: "none" },
+      messages: [{ role: "user", content: "hi" }],
+    },
+    modelConfig,
+  );
+  assert.deepEqual(anthropicRequest.tool_choice, { type: "none" });
+});

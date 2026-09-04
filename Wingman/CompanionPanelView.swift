@@ -35,6 +35,7 @@ struct CompanionPanelView: View {
                 .frame(height: 12)
 
             accountSection
+            gatewayAccessProblemBanner
                 .padding(.horizontal, 16)
 
             if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
@@ -624,6 +625,25 @@ struct CompanionPanelView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// The gateway refused a tool call for this account (docs/PERMISSIONS.md 4). Stays until the
+    /// next turn that reaches the model without an access problem.
+    @ViewBuilder
+    private var gatewayAccessProblemBanner: some View {
+        if let gatewayAccessProblemMessage = companionManager.gatewayAccessProblemMessage {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.warning)
+                    .frame(width: 16)
+                Text(gatewayAccessProblemMessage)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(DS.Colors.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+        }
     }
 
     private func signInButton(title: String) -> some View {

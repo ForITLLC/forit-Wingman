@@ -126,3 +126,49 @@ federated to `ForITLLC/forit-Wingman` branch `main` and environment `production`
 Interim access rule (accepted by the Commander 2026-09-04 as phase 1, not the design): the relay refuses
 any signed-in account whose email domain is not `forit.io` (`WINGMAN_ALLOWED_EMAIL_DOMAINS`). The design is
 per-user identity pass-through on `support_*` (for-mcp WO#1908); the domain filter comes out when that lands.
+
+## 002 — Support skill: the app runs the tool loop and calls the gateway itself; the relay only forwards tool blocks
+
+### Context
+
+WO#1907 makes Support the primary skill: "open tickets for a client", "summarise ticket n and what
+blocks it", "draft a reply to ticket n". The Support database may be reached only through the for-mcp
+gateway's `support_*` tools (no connection string, SQL or driver in the app), and a draft must never
+reach a customer. for-mcp WO#1908 (2026-09-04) gave Wingman a delegated gateway token
+(`ForIT-Wingman-Client` `acc81527…`, scope `access_as_user`), so the gateway can see the person.
+
+### Options considered
+
+1. **Relay executes tools.** The relay would need the user's gateway token (or its own service
+   identity), and every audited call would carry the relay's identity or a token the relay should not
+   hold. It also puts ForIT support data through a component that otherwise stores and sees nothing.
+2. **App executes tools, relay forwards the blocks (chosen).** The relay stays a dumb, stateless
+   passthrough to Anthropic (it validates `tools` / `tool_use` / `tool_result` shapes and sizes, nothing
+   more). The app calls the gateway over MCP with the user's own token, so the gateway's role check and
+   audit trail name the person, and the relay never sees ticket data.
+3. **Prompt-only safety for drafts.** Asking the model to "only write drafts" is not enforcement.
+
+### Decision
+
+Option 2, with deterministic app-side policy in `WingmanToolCatalog`:
+
+- Only three tools are described to the model (`support_listTickets`, `support_addTicketNote`,
+  `forit_avops_search_flights`). `support_replyToTicket`, delete, assign, bulk-update and provisioning
+  tools do not exist as far as the model knows.
+- "Draft a reply" is always `support_addTicketNote` with content prefixed `DRAFT (Wingman): ` and
+  `author_name` = "Wingman for <name> <email>". The prefix is applied by code, once, whatever the model
+  sent. The gateway records the note under the ForIT Automation identity; it emails nobody.
+- At most four tool rounds per spoken question, then a forced answer (`tool_choice: none`).
+- Gateway `401` / `403` are not fed back to the model: the turn ends with the fixed spoken refusal from
+  `docs/PERMISSIONS.md` 4 and a panel banner, so a user without a role hears the same sentence every time.
+- Tool results are condensed (ticket lists keep the fields needed to answer or draft) and capped at 64
+  KB by the relay.
+
+### Consequences
+
+- The relay's `/api/chat` accepts `tools`, `tool_choice` and the two tool block types; it still
+  stores nothing and never calls a tool.
+- Tool rounds are not kept in the conversation history between turns, so the context stays small and
+  a stale tool result is never reasoned from twice; the spoken reply is what the model remembers.
+- A gateway or protocol change shows up as an error `tool_result` the model reads aloud ("that
+  failed"), not as an invented answer.

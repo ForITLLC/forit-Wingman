@@ -82,6 +82,24 @@ final class CompanionManager: ObservableObject {
         )
     }()
 
+    /// Support and flight tools run against the for-mcp gateway with the user's own gateway
+    /// token, never through the relay, so the gateway audits each call under the person's name.
+    private lazy var gatewayToolClient: WingmanGatewayToolClient = {
+        return WingmanGatewayToolClient(
+            gatewayMCPURL: WingmanServiceConfiguration.gatewayMCPURL,
+            bearerTokenProvider: { [signInManager] in try await signInManager.validGatewayAccessToken() }
+        )
+    }()
+
+    /// Set when the gateway refused a tool call for this user (no gateway role, or a role below
+    /// what the tool needs). Shown in the panel until the next successful turn; the spoken reply
+    /// for that turn is the fixed refusal from docs/PERMISSIONS.md 4, not model text.
+    @Published private(set) var gatewayAccessProblemMessage: String?
+
+    /// How many tool rounds one spoken question may spend before the model must answer with what
+    /// it has. Listing, then looking one ticket up, then drafting is three.
+    private static let maximumToolRoundsPerTurn = 4
+
     /// Conversation history so Claude remembers prior exchanges within a session.
     /// Each entry is the user's transcript and Claude's response.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
@@ -492,6 +510,14 @@ final class CompanionManager: ObservableObject {
     - instead, when it fits naturally, end by planting a seed — mention something bigger or more ambitious they could try, a related concept that goes deeper, or a next-level technique that builds on what you just explained. make it something worth coming back for, not a question they'd just nod to. it's okay to not end with anything extra if the answer is complete on its own.
     - if you receive multiple screen images, the one labeled "primary focus" is where the cursor is — prioritize that one but reference others if relevant.
 
+    forit support:
+    you also work the forit help desk alongside the signed-in staff member, and you have three tools. they are the only way you know anything about tickets or flights: never guess a ticket, a status, a summary or a flight from memory or from the screenshot alone when a tool can answer.
+    - support_listTickets lists tickets. filter by tenant slug for a client (forit, gna, wma and so on), status "active" for open work, or search by ticket number. ticket numbers look like "FI-000227"; the user will usually say just the digits ("two twenty seven"), so search those digits and pick the ticket whose number ends with them. search also matches subject words, so ignore hits whose number doesn't match.
+    - support_addTicketNote saves a draft reply on a ticket as an internal note. use it when the user asks you to draft a reply or a response. write the reply itself as the content, addressed to the requester, in a professional tone and normal capitalisation (this is written, not spoken). the app marks it "DRAFT (Wingman):" and it is never sent; afterwards tell the user the draft is on the ticket as an internal note for them to review and send.
+    - forit_avops_search_flights answers any flight question for the airline ops tenant: today's schedule, delays, cancellations, a specific flight or airport.
+    you cannot send replies, close, assign, delete or bulk-update tickets, or change user accounts. if asked, say the draft or the note is as far as you go and the staff member finishes it in the support portal.
+    when summarising a ticket say who raised it, what it is about, its status and what is blocking it, in a sentence or two. for a list give the count and the two or three that matter most (breached or nearest sla, highest priority), not every ticket. say ticket numbers as digits, like "ticket two twenty seven". a tool error means you say what failed; never invent the answer.
+
     element pointing:
     you have a small blue triangle cursor that can fly to and point at things on screen. use it whenever pointing would genuinely help the user — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app, point at the relevant element. err on the side of pointing rather than not pointing, because it makes your help way more useful and concrete.
 
@@ -539,19 +565,11 @@ final class CompanionManager: ObservableObject {
                     return (data: capture.imageData, label: capture.label + dimensionInfo)
                 }
 
-                // Pass conversation history so Claude remembers prior exchanges
-                let historyForAPI = conversationHistory.map { entry in
-                    (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
-                }
+                gatewayAccessProblemMessage = nil
 
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
-                    images: labeledImages,
-                    systemPrompt: Self.companionVoiceResponseSystemPrompt,
-                    conversationHistory: historyForAPI,
-                    userPrompt: transcript,
-                    onTextChunk: { _ in
-                        // No streaming text display — spinner stays until TTS plays
-                    }
+                let fullResponseText = try await runModelTurnWithGatewayTools(
+                    labeledImages: labeledImages,
+                    transcript: transcript
                 )
 
                 guard !Task.isCancelled else { return }
@@ -669,6 +687,144 @@ final class CompanionManager: ObservableObject {
                 voiceState = .idle
                 scheduleTransientHideIfNeeded()
             }
+        }
+    }
+
+    // MARK: - Gateway tool loop
+
+    /// What one model-requested tool call came to. An access problem ends the turn with a fixed
+    /// spoken refusal; anything else goes back to the model as a tool_result.
+    private enum GatewayToolOutcome {
+        case result(text: String, isError: Bool)
+        case accessProblem(spokenReply: String, panelMessage: String)
+    }
+
+    /// Runs the model over the conversation, executing any gateway tools it asks for, until it
+    /// answers in text. The history holds only spoken exchanges (transcript + reply); the tool
+    /// rounds of a turn are not carried into later turns, which keeps the context small and
+    /// means a stale tool result is never reasoned from twice.
+    private func runModelTurnWithGatewayTools(
+        labeledImages: [(data: Data, label: String)],
+        transcript: String
+    ) async throws -> String {
+        var messages: [[String: Any]] = []
+        for exchange in conversationHistory {
+            messages.append(["role": "user", "content": exchange.userTranscript])
+            messages.append(["role": "assistant", "content": exchange.assistantResponse])
+        }
+        messages.append([
+            "role": "user",
+            "content": ClaudeAPI.userMessageContentBlocks(images: labeledImages, userPrompt: transcript)
+        ])
+
+        let toolDefinitions = WingmanToolCatalog.modelToolDefinitions
+
+        for _ in 0..<Self.maximumToolRoundsPerTurn {
+            let streamedTurn = try await claudeAPI.streamTurn(
+                systemPrompt: Self.companionVoiceResponseSystemPrompt,
+                messages: messages,
+                tools: toolDefinitions,
+                toolChoice: ["type": "auto"],
+                onTextChunk: { _ in
+                    // No streaming text display — spinner stays until TTS plays
+                }
+            )
+            guard !Task.isCancelled else { throw CancellationError() }
+            guard streamedTurn.wantsToolCalls else {
+                return streamedTurn.text
+            }
+
+            messages.append(["role": "assistant", "content": streamedTurn.assistantContentBlocks])
+
+            var toolResultBlocks: [[String: Any]] = []
+            for toolUse in streamedTurn.toolUses {
+                let outcome = await executeGatewayTool(toolUse)
+                guard !Task.isCancelled else { throw CancellationError() }
+                switch outcome {
+                case .accessProblem(let spokenReply, let panelMessage):
+                    gatewayAccessProblemMessage = panelMessage
+                    NotificationCenter.default.post(name: .wingmanShowPanel, object: nil)
+                    return spokenReply + " [POINT:none]"
+                case .result(let text, let isError):
+                    toolResultBlocks.append([
+                        "type": "tool_result",
+                        "tool_use_id": toolUse.id,
+                        "content": text,
+                        "is_error": isError
+                    ])
+                }
+            }
+            messages.append(["role": "user", "content": toolResultBlocks])
+        }
+
+        // The round cap is spent: one last turn with tools still declared (the transcript holds
+        // tool blocks, which the API only accepts alongside tool definitions) but none allowed.
+        let finalTurn = try await claudeAPI.streamTurn(
+            systemPrompt: Self.companionVoiceResponseSystemPrompt,
+            messages: messages,
+            tools: toolDefinitions,
+            toolChoice: ["type": "none"],
+            onTextChunk: { _ in }
+        )
+        return finalTurn.text
+    }
+
+    /// Applies the app-side policy (allow-list, argument rewriting) and calls the gateway.
+    /// Sign-in failures propagate so the caller's existing sign-in handling runs; everything else
+    /// becomes an outcome the model or the fixed refusal can speak.
+    private func executeGatewayTool(_ toolUse: ClaudeToolUseRequest) async -> GatewayToolOutcome {
+        let preparedCall: WingmanPreparedToolCall
+        do {
+            preparedCall = try WingmanToolCatalog.prepareCall(
+                toolName: toolUse.name,
+                modelArguments: toolUse.input,
+                signedInAccount: signInManager.signedInAccount
+            )
+        } catch let refusal as WingmanToolRefusal {
+            WingmanAnalytics.trackToolRefused(toolName: toolUse.name, reason: refusal.modelFacingMessage)
+            print("🛑 Tool refused by the app: \(refusal.modelFacingMessage)")
+            return .result(text: refusal.modelFacingMessage, isError: true)
+        } catch {
+            return .result(text: "\(toolUse.name) was not called: \(error.localizedDescription)", isError: true)
+        }
+
+        WingmanAnalytics.trackToolCalled(toolName: preparedCall.toolName)
+        print("🔧 Gateway tool: \(preparedCall.toolName) \(preparedCall.arguments.keys.sorted())")
+
+        do {
+            let toolResult = try await gatewayToolClient.callTool(named: preparedCall.toolName, arguments: preparedCall.arguments)
+            let condensedText = WingmanToolCatalog.condenseResult(toolName: preparedCall.toolName, resultText: toolResult.text)
+            if toolResult.isError {
+                WingmanAnalytics.trackToolFailed(toolName: preparedCall.toolName, outcome: "tool_error")
+            }
+            return .result(text: condensedText, isError: toolResult.isError)
+        } catch let gatewayError as WingmanGatewayToolError {
+            let signedInEmail = signInManager.signedInAccount?.emailAddress ?? "this account"
+            switch gatewayError {
+            case .accessDenied(let detail):
+                WingmanAnalytics.trackToolFailed(toolName: preparedCall.toolName, outcome: "access_denied")
+                print("🛑 Gateway access denied: \(detail)")
+                return .accessProblem(
+                    spokenReply: "I can't do that with your current access.",
+                    panelMessage: "Wingman access denied for \(signedInEmail). Ask a ForIT admin for a gateway role."
+                )
+            case .insufficientAccess(let detail):
+                WingmanAnalytics.trackToolFailed(toolName: preparedCall.toolName, outcome: "insufficient_access")
+                print("🛑 Gateway needs a higher role: \(detail)")
+                let requiredLevel = WingmanToolCatalog.descriptor(named: preparedCall.toolName)?.minimumAccessLevel.rawValue ?? "a higher"
+                return .accessProblem(
+                    spokenReply: "That needs \(requiredLevel) access.",
+                    panelMessage: "\(preparedCall.toolName) needs \(requiredLevel) access on the ForIT gateway; \(signedInEmail) has less."
+                )
+            default:
+                WingmanAnalytics.trackToolFailed(toolName: preparedCall.toolName, outcome: "gateway_error")
+                print("⚠️ Gateway tool error: \(gatewayError)")
+                return .result(text: "\(preparedCall.toolName) failed: \(gatewayError.localizedDescription)", isError: true)
+            }
+        } catch {
+            WingmanAnalytics.trackToolFailed(toolName: preparedCall.toolName, outcome: "transport_error")
+            print("⚠️ Gateway tool transport error: \(error)")
+            return .result(text: "\(preparedCall.toolName) failed: \(error.localizedDescription)", isError: true)
         }
     }
 

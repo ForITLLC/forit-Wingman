@@ -93,7 +93,7 @@ class ClaudeAPI {
     /// Screen captures from ScreenCaptureKit are JPEG, but pasted images from the
     /// clipboard are PNG. The API rejects requests where the declared media_type
     /// doesn't match the actual image format.
-    private func detectImageMediaType(for imageData: Data) -> String {
+    static func detectImageMediaType(for imageData: Data) -> String {
         // PNG files start with the 8-byte signature: 89 50 4E 47 0D 0A 1A 0A
         if imageData.count >= 4 {
             let pngSignature: [UInt8] = [0x89, 0x50, 0x4E, 0x47]
@@ -139,29 +139,9 @@ class ClaudeAPI {
         }.resume()
     }
 
-    /// Send a vision request to Claude with streaming.
-    /// Calls `onTextChunk` on the main actor each time new text arrives so the UI updates progressively.
-    /// Returns the full accumulated text and total duration when the stream completes.
-    func analyzeImageStreaming(
-        images: [(data: Data, label: String)],
-        systemPrompt: String,
-        conversationHistory: [(userPlaceholder: String, assistantResponse: String)] = [],
-        userPrompt: String,
-        onTextChunk: @MainActor @Sendable (String) -> Void
-    ) async throws -> (text: String, duration: TimeInterval) {
-        let startTime = Date()
-
-        var request = try await makeAuthorizedRequest()
-
-        // Build messages array
-        var messages: [[String: Any]] = []
-
-        for (userPlaceholder, assistantResponse) in conversationHistory {
-            messages.append(["role": "user", "content": userPlaceholder])
-            messages.append(["role": "assistant", "content": assistantResponse])
-        }
-
-        // Build current message with all labeled images + prompt
+    /// The content blocks of a user turn: each screenshot followed by its label, then the spoken
+    /// prompt. Shared by the plain vision call and the tool loop so both send the same shape.
+    static func userMessageContentBlocks(images: [(data: Data, label: String)], userPrompt: String) -> [[String: Any]] {
         var contentBlocks: [[String: Any]] = []
         for image in images {
             contentBlocks.append([
@@ -181,20 +161,75 @@ class ClaudeAPI {
             "type": "text",
             "text": userPrompt
         ])
-        messages.append(["role": "user", "content": contentBlocks])
+        return contentBlocks
+    }
 
-        let body: [String: Any] = [
+    /// Send a vision request to Claude with streaming.
+    /// Calls `onTextChunk` on the main actor each time new text arrives so the UI updates progressively.
+    /// Returns the full accumulated text and total duration when the stream completes.
+    func analyzeImageStreaming(
+        images: [(data: Data, label: String)],
+        systemPrompt: String,
+        conversationHistory: [(userPlaceholder: String, assistantResponse: String)] = [],
+        userPrompt: String,
+        onTextChunk: @MainActor @Sendable (String) -> Void
+    ) async throws -> (text: String, duration: TimeInterval) {
+        let startTime = Date()
+
+        var messages: [[String: Any]] = []
+        for (userPlaceholder, assistantResponse) in conversationHistory {
+            messages.append(["role": "user", "content": userPlaceholder])
+            messages.append(["role": "assistant", "content": assistantResponse])
+        }
+        messages.append([
+            "role": "user",
+            "content": Self.userMessageContentBlocks(images: images, userPrompt: userPrompt)
+        ])
+
+        let streamedTurn = try await streamTurn(
+            systemPrompt: systemPrompt,
+            messages: messages,
+            tools: [],
+            toolChoice: nil,
+            onTextChunk: onTextChunk
+        )
+
+        let duration = Date().timeIntervalSince(startTime)
+        return (text: streamedTurn.text, duration: duration)
+    }
+
+    /// One streamed model turn over an explicit message list, optionally offering tools.
+    /// `messages` is the Anthropic shape (role + string or content blocks), so a caller running a
+    /// tool loop can append the assistant's `tool_use` blocks and its own `tool_result` blocks and
+    /// call again. Calls `onTextChunk` on the main actor with the accumulated text as it arrives.
+    func streamTurn(
+        systemPrompt: String,
+        messages: [[String: Any]],
+        tools: [[String: Any]],
+        toolChoice: [String: Any]?,
+        maxTokens: Int = 1024,
+        onTextChunk: @MainActor @Sendable (String) -> Void
+    ) async throws -> ClaudeStreamedTurn {
+        var request = try await makeAuthorizedRequest()
+
+        var body: [String: Any] = [
             "model": model,
-            "max_tokens": 1024,
+            "max_tokens": maxTokens,
             "stream": true,
             "system": systemPrompt,
             "messages": messages
         ]
+        if !tools.isEmpty {
+            body["tools"] = tools
+            if let toolChoice {
+                body["tool_choice"] = toolChoice
+            }
+        }
 
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = bodyData
         let payloadMB = Double(bodyData.count) / 1_048_576.0
-        print("🌐 Relay chat request: \(String(format: "%.1f", payloadMB))MB, \(images.count) image(s), model \(model)")
+        print("🌐 Relay chat request: \(String(format: "%.1f", payloadMB))MB, \(messages.count) message(s), \(tools.count) tool(s), model \(model)")
 
         // Use bytes streaming for SSE (Server-Sent Events)
         let (byteStream, response) = try await session.bytes(for: request)
@@ -216,37 +251,182 @@ class ClaudeAPI {
             throw WingmanRelayError.relayRejected(statusCode: httpResponse.statusCode, message: errorMessage)
         }
 
-        // Parse SSE stream — each event is "data: {json}\n\n"
-        var accumulatedResponseText = ""
-
+        var streamParser = ClaudeSSEStreamParser()
         for try await line in byteStream.lines {
-            // SSE lines look like: "data: {...}"
-            guard line.hasPrefix("data: ") else { continue }
-            let jsonString = String(line.dropFirst(6)) // Drop "data: " prefix
-
-            // End of stream marker
-            guard jsonString != "[DONE]" else { break }
-
-            guard let jsonData = jsonString.data(using: .utf8),
-                  let eventPayload = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                  let eventType = eventPayload["type"] as? String else {
-                continue
+            if let accumulatedText = streamParser.consume(line: line) {
+                await onTextChunk(accumulatedText)
             }
-
-            // We care about content_block_delta events that contain text chunks
-            if eventType == "content_block_delta",
-               let delta = eventPayload["delta"] as? [String: Any],
-               let deltaType = delta["type"] as? String,
-               deltaType == "text_delta",
-               let textChunk = delta["text"] as? String {
-                accumulatedResponseText += textChunk
-                // Send the accumulated text so far to the UI for progressive rendering
-                let currentAccumulatedText = accumulatedResponseText
-                await onTextChunk(currentAccumulatedText)
+            if streamParser.hasReachedEndOfMessage {
+                break
             }
         }
 
-        let duration = Date().timeIntervalSince(startTime)
-        return (text: accumulatedResponseText, duration: duration)
+        return streamParser.finishedTurn()
+    }
+}
+
+// MARK: - Streamed turn
+
+/// The model asking the app to run one tool. `input` is the parsed JSON the model produced.
+struct ClaudeToolUseRequest {
+    let id: String
+    let name: String
+    let input: [String: Any]
+}
+
+/// Everything one streamed model turn produced.
+struct ClaudeStreamedTurn {
+    /// The text blocks joined, in order.
+    let text: String
+    let toolUses: [ClaudeToolUseRequest]
+    /// Anthropic's stop_reason: "end_turn", "tool_use", "max_tokens", ...
+    let stopReason: String?
+    /// The assistant turn exactly as it must be echoed back into `messages` before tool results:
+    /// text blocks and tool_use blocks in stream order.
+    let assistantContentBlocks: [[String: Any]]
+
+    var wantsToolCalls: Bool {
+        stopReason == "tool_use" && !toolUses.isEmpty
+    }
+}
+
+/// Incremental parser for the Anthropic Messages SSE stream. Fed one line at a time; pure, so the
+/// event handling is unit-tested without a network. Text deltas accumulate per block; tool_use
+/// blocks collect their `input_json_delta` fragments and are decoded on `content_block_stop`.
+struct ClaudeSSEStreamParser {
+    private struct ContentBlockInProgress {
+        let type: String
+        var toolUseId: String = ""
+        var toolName: String = ""
+        var text: String = ""
+        var partialToolInputJSON: String = ""
+        var decodedToolInput: [String: Any] = [:]
+    }
+
+    private var blocksByIndex: [Int: ContentBlockInProgress] = [:]
+    private var stopReason: String?
+    private(set) var hasReachedEndOfMessage = false
+
+    init() {}
+
+    /// Consumes one SSE line. Returns the accumulated text whenever a text delta arrived, so a
+    /// caller can render progressively; nil for every other line.
+    mutating func consume(line: String) -> String? {
+        guard line.hasPrefix("data: ") else { return nil }
+        let jsonString = String(line.dropFirst(6))
+        guard jsonString != "[DONE]" else {
+            hasReachedEndOfMessage = true
+            return nil
+        }
+        guard let jsonData = jsonString.data(using: .utf8),
+              let eventPayload = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let eventType = eventPayload["type"] as? String else {
+            return nil
+        }
+
+        switch eventType {
+        case "content_block_start":
+            guard let blockIndex = eventPayload["index"] as? Int,
+                  let contentBlock = eventPayload["content_block"] as? [String: Any],
+                  let blockType = contentBlock["type"] as? String else { return nil }
+            var block = ContentBlockInProgress(type: blockType)
+            if blockType == "tool_use" {
+                block.toolUseId = contentBlock["id"] as? String ?? ""
+                block.toolName = contentBlock["name"] as? String ?? ""
+            } else if blockType == "text" {
+                block.text = contentBlock["text"] as? String ?? ""
+            }
+            blocksByIndex[blockIndex] = block
+            return nil
+
+        case "content_block_delta":
+            guard let blockIndex = eventPayload["index"] as? Int,
+                  let delta = eventPayload["delta"] as? [String: Any],
+                  let deltaType = delta["type"] as? String else { return nil }
+            if deltaType == "text_delta", let textChunk = delta["text"] as? String {
+                var block = blocksByIndex[blockIndex] ?? ContentBlockInProgress(type: "text")
+                block.text += textChunk
+                blocksByIndex[blockIndex] = block
+                return accumulatedText
+            }
+            if deltaType == "input_json_delta", let partialJSON = delta["partial_json"] as? String {
+                var block = blocksByIndex[blockIndex] ?? ContentBlockInProgress(type: "tool_use")
+                block.partialToolInputJSON += partialJSON
+                blocksByIndex[blockIndex] = block
+            }
+            return nil
+
+        case "content_block_stop":
+            guard let blockIndex = eventPayload["index"] as? Int,
+                  var block = blocksByIndex[blockIndex], block.type == "tool_use" else { return nil }
+            // An empty tool input streams as no deltas at all; that is a valid `{}`.
+            let inputJSON = block.partialToolInputJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+            if inputJSON.isEmpty {
+                block.decodedToolInput = [:]
+            } else if let inputData = inputJSON.data(using: .utf8),
+                      let decodedInput = try? JSONSerialization.jsonObject(with: inputData) as? [String: Any] {
+                block.decodedToolInput = decodedInput
+            } else {
+                // Leave the raw text so the tool layer can report a malformed call rather than
+                // silently calling with nothing.
+                block.decodedToolInput = ["_malformed_input_json": inputJSON]
+            }
+            blocksByIndex[blockIndex] = block
+            return nil
+
+        case "message_delta":
+            if let delta = eventPayload["delta"] as? [String: Any],
+               let reportedStopReason = delta["stop_reason"] as? String {
+                stopReason = reportedStopReason
+            }
+            return nil
+
+        case "message_stop":
+            hasReachedEndOfMessage = true
+            return nil
+
+        default:
+            return nil
+        }
+    }
+
+    private var orderedBlocks: [ContentBlockInProgress] {
+        blocksByIndex.keys.sorted().compactMap { blocksByIndex[$0] }
+    }
+
+    var accumulatedText: String {
+        orderedBlocks.filter { $0.type == "text" }.map { $0.text }.joined()
+    }
+
+    func finishedTurn() -> ClaudeStreamedTurn {
+        var toolUses: [ClaudeToolUseRequest] = []
+        var assistantContentBlocks: [[String: Any]] = []
+
+        for block in orderedBlocks {
+            switch block.type {
+            case "text":
+                if !block.text.isEmpty {
+                    assistantContentBlocks.append(["type": "text", "text": block.text])
+                }
+            case "tool_use":
+                let toolUse = ClaudeToolUseRequest(id: block.toolUseId, name: block.toolName, input: block.decodedToolInput)
+                toolUses.append(toolUse)
+                assistantContentBlocks.append([
+                    "type": "tool_use",
+                    "id": toolUse.id,
+                    "name": toolUse.name,
+                    "input": toolUse.input
+                ])
+            default:
+                continue
+            }
+        }
+
+        return ClaudeStreamedTurn(
+            text: accumulatedText,
+            toolUses: toolUses,
+            stopReason: stopReason,
+            assistantContentBlocks: assistantContentBlocks
+        )
     }
 }

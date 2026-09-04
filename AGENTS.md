@@ -15,7 +15,7 @@ The user signs in with their ForIT (Entra) account. Every relay call carries tha
 - **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
 - **Sign-in**: Microsoft Entra authorization-code + PKCE in the system browser (`WingmanEntraSignInManager.swift`), custom URL scheme `msauth.io.forit.wingman://auth`, refresh token in the login keychain. The id_token is the bearer for the relay; a gateway access token (`api://861db494-…/access_as_user`, client `acc81527-…`, see for-mcp `docs/native-clients.md`) is minted for the for-mcp tools layer.
-- **AI Chat**: Claude (Sonnet 5 default, Opus 5 optional; allow-list in `WingmanServiceConfiguration.swift`) via the ForIT relay `/api/chat` with SSE streaming
+- **AI Chat**: Claude (Sonnet 5 default, Opus 5 optional; allow-list in `WingmanServiceConfiguration.swift`) via the ForIT relay `/api/chat` with SSE streaming. Each spoken question runs a tool loop (`CompanionManager.runModelTurnWithGatewayTools`): the model may call the allow-listed gateway tools, the app executes them and feeds `tool_result` blocks back, at most four rounds, then a forced spoken answer.
 - **Speech-to-Text**: on-device Apple Speech only (`AppleSpeechTranscriptionProvider.swift`); audio never leaves the Mac
 - **Text-to-Speech**: ElevenLabs via the relay `/api/tts`; `AVSpeechSynthesizer` on-device when the relay answers 501 (no voice configured)
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
@@ -38,7 +38,9 @@ Relay settings come from Key Vault references (`ANTHROPIC_API_KEY`, `ELEVENLABS_
 
 ### Tools layer (for-mcp gateway)
 
-Support data is reached only through the for-mcp gateway's `support_*` MCP tools, called with the user's gateway access token. There is no connection string, SQL, or database driver in the app. The static allow-list of tools the app may call lives in the Support skill (`docs/PERMISSIONS.md`).
+Support data is reached only through the for-mcp gateway's `support_*` MCP tools, called by the app itself (`WingmanGatewayToolClient.swift`, MCP Streamable HTTP, `POST …/mcp`) with the user's own gateway access token (scope `access_as_user`, client `ForIT-Wingman-Client`). The relay never sees that token and never executes a tool; it only forwards tool definitions and `tool_use` / `tool_result` blocks to Anthropic. There is no connection string, SQL, or database driver in the app.
+
+The static allow-list is `WingmanToolCatalog.swift`: `support_listTickets`, `support_addTicketNote`, `forit_avops_search_flights`. Nothing else is described to the model. The catalog also applies the app-side policy before a call leaves the machine: a "draft reply" is always an internal note whose content starts with `DRAFT (Wingman): ` and whose `author_name` labels the signed-in person's Wingman; unknown argument keys are dropped; ticket lists are condensed to the fields the model needs. Gateway `401` / `403` end the turn with the fixed spoken refusals in `docs/PERMISSIONS.md` 4 and a panel banner (`gatewayAccessProblemMessage`).
 
 ### Key Architecture Decisions
 
@@ -57,12 +59,14 @@ Support data is reached only through the for-mcp gateway's `support_*` MCP tools
 | File | Lines | Purpose |
 |------|-------|---------|
 | `WingmanApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
-| `CompanionManager.swift` | ~1060 | Central state machine. Owns the sign-in manager, dictation, shortcut monitoring, screen capture, the relay chat client, TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, and cursor visibility. Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline and refuses it while signed out. |
+| `CompanionManager.swift` | ~1095 | Central state machine. Owns the sign-in manager, dictation, shortcut monitoring, screen capture, the relay chat client, the gateway tool client, TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, cursor visibility, and the gateway access banner. Coordinates the full push-to-talk → screenshot → Claude (tool loop) → TTS → pointing pipeline and refuses it while signed out. The voice system prompt, including the ForIT support section, lives here. |
 | `MenuBarPanelManager.swift` | ~258 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor, and opens the panel on `.wingmanShowPanel`. |
-| `CompanionPanelView.swift` | ~880 | SwiftUI panel content for the menu bar dropdown. Shows companion status, the account row (sign in / signed-in user / sign out), push-to-talk instructions, model picker from the relay allow-list, permissions UI, and quit button. Dark aesthetic using `DS` design system. |
+| `CompanionPanelView.swift` | ~800 | SwiftUI panel content for the menu bar dropdown. Shows companion status, the account row (sign in / signed-in user / sign out), the gateway access banner, push-to-talk instructions, model picker from the relay allow-list, permissions UI, and quit button. Dark aesthetic using `DS` design system. |
 | `WingmanEntraSignInManager.swift` | ~330 | Entra sign-in state machine (`signedOut`/`signingIn`/`signedIn`/`failed`). Browser PKCE flow, custom-scheme callback, token refresh, keychain persistence, `validIdToken()` for the relay and `validGatewayAccessToken()` for for-mcp. |
 | `WingmanSignInSupport.swift` | ~170 | PKCE helpers, id_token claim reader (display only, no local signature check), keychain store. |
-| `WingmanServiceConfiguration.swift` | ~60 | Relay URLs, Entra tenant/client ids, gateway scope, and the selectable model allow-list. |
+| `WingmanServiceConfiguration.swift` | ~94 | Relay URLs, Entra tenant/client ids, gateway scope and MCP endpoint, and the selectable model allow-list. |
+| `WingmanToolCatalog.swift` | ~303 | The static allow-list of gateway tools described to the model (three), their JSON schemas, the app-side argument policy (`prepareCall`: draft-note prefix and author label, key whitelisting, limit clamping) and ticket-list condensing. |
+| `WingmanGatewayToolClient.swift` | ~284 | MCP Streamable HTTP client for the for-mcp gateway: `initialize` + `tools/call` with the user's gateway token, JSON or SSE responses, `mcp-session-id` handling, 401 → `accessDenied`, 403 → `insufficientAccess`. Pure parsing helpers are unit-tested. |
 | `OverlayWindow.swift` | ~881 | Full-screen transparent overlay hosting the blue cursor, response text, waveform, and spinner. Handles cursor animation, element pointing with bezier arcs, multi-monitor coordinate mapping, and fade-out transitions. |
 | `CompanionResponseOverlay.swift` | ~217 | SwiftUI view for the response text bubble and waveform displayed next to the cursor in the overlay. |
 | `CompanionScreenCaptureUtility.swift` | ~132 | Multi-monitor screenshot capture using ScreenCaptureKit. Returns labeled image data for each connected display. |
@@ -71,14 +75,15 @@ Support data is reached only through the for-mcp gateway's `support_*` MCP tools
 | `AppleSpeechTranscriptionProvider.swift` | ~147 | On-device transcription provider backed by Apple's Speech framework. |
 | `BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads. |
 | `GlobalPushToTalkShortcutMonitor.swift` | ~132 | System-wide push-to-talk monitor. Owns the listen-only `CGEvent` tap and publishes press/release transitions. |
-| `ClaudeAPI.swift` | ~250 | Relay chat client (SSE streaming). Bearer via `WingmanBearerTokenProvider`, `WingmanRelayError` with 401 → `notAuthorized`, TLS warmup, image MIME detection, conversation history support. |
+| `ClaudeAPI.swift` | ~432 | Relay chat client (SSE streaming). `streamTurn` sends an explicit message list plus tool definitions and returns a `ClaudeStreamedTurn` (text, `tool_use` requests, stop reason, echo blocks); `ClaudeSSEStreamParser` is the pure event parser. `analyzeImageStreaming` remains for the onboarding demo. Bearer via `WingmanBearerTokenProvider`, `WingmanRelayError` with 401 → `notAuthorized`, TLS warmup, image MIME detection. |
 | `ElevenLabsTTSClient.swift` | ~113 | Speaks replies via the relay `/api/tts`, or on-device `AVSpeechSynthesizer` after a 501. Exposes `isPlaying` for transient cursor scheduling. |
 | `DesignSystem.swift` | ~880 | Design system tokens — colors, corner radii, shared styles. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
-| `WingmanAnalytics.swift` | ~110 | Local analytics wrapper: same static API upstream used for PostHog, now `os.Logger` debug lines only. |
+| `WingmanAnalytics.swift` | ~135 | Local analytics wrapper: same static API upstream used for PostHog, now `os.Logger` debug lines only. Tool events log the tool name and a stable outcome label, never arguments or results. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
 | `WingmanTests/WingmanSignInTests.swift` | ~99 | Swift Testing coverage for PKCE, authorize URL, callback parsing, id_token claims, form encoding, model allow-list mapping. |
-| `relay/src/` | ~600 | Azure Functions relay: `health`, `chat`, `tts` handlers, Entra token validation, model allow-list. Tests in `relay/test/`. |
+| `WingmanTests/WingmanToolUseTests.swift` | ~285 | Swift Testing coverage for the tool allow-list and draft policy, the SSE `tool_use` parser, and gateway response / refusal parsing. |
+| `relay/src/` | ~1100 | Azure Functions relay: `health`, `chat` (incl. tool passthrough validation), `tts` handlers, Entra token validation, model allow-list. Tests are the `*.test.ts` files beside the sources (`npm test`). |
 
 ## Build & Run
 

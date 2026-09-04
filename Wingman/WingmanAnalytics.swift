@@ -97,6 +97,23 @@ enum WingmanAnalytics {
         record("element_pointed", properties: ["element_label": elementLabel ?? "unknown"])
     }
 
+    // MARK: - Tools
+
+    /// The model asked for a gateway tool and the app-side policy let it through.
+    static func trackToolCalled(toolName: String) {
+        record("tool_called", properties: ["tool": toolName])
+    }
+
+    /// The app refused a tool call before the gateway (not on the allow-list, bad arguments).
+    static func trackToolRefused(toolName: String, reason: String) {
+        record("tool_refused", properties: ["tool": toolName, "reason": reason])
+    }
+
+    /// The gateway refused or failed a tool call; `outcome` is a stable label, never the payload.
+    static func trackToolFailed(toolName: String, outcome: String) {
+        record("tool_failed", properties: ["tool": toolName, "outcome": outcome])
+    }
+
     // MARK: - Sign-in
 
     /// The user completed an interactive ForIT sign-in. No account details are recorded.

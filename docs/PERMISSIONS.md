@@ -46,10 +46,16 @@ never described to the model, so the model cannot call it even if the gateway wo
 
 | Cause | Where detected | What the user sees |
 |-------|----------------|--------------------|
-| No role / expired role | gateway `401` on `tools/call` | Panel banner "Wingman access denied for `<upn>`" and the spoken reply "I can't do that with your current access." |
-| Level too low (Viewer asks to draft) | gateway `403` on `tools/call` | Spoken reply names the missing level: "That needs Operator access." |
-| Tool not on the allow-list | app, before the call | Spoken reply "That isn't something Wingman can do." |
-| Relay refuses (guest, bad audience) | relay `401` | Panel shows "Signed in with the wrong account" and offers sign-out. |
+| Token rejected / client not allow-listed / no gateway role | gateway `401` on `tools/call` | Panel banner "Wingman access denied for `<upn>`. Ask a ForIT admin for a gateway role." and the fixed spoken reply "I can't do that with your current access." The model is not consulted for that turn. |
+| Level too low (Reader asks to draft) | gateway `403 insufficient_scope` on `tools/call` | Fixed spoken reply naming the tool's minimum level from the catalog: "That needs Operator access." Panel banner names the tool and the level. |
+| Tool not on the allow-list, or malformed arguments | app, before the call (`WingmanToolCatalog.prepareCall`) | Returned to the model as an error `tool_result` ("… is not something Wingman can do."); the model tells the user in its own words. Cannot normally happen: the model only sees allow-listed tools. |
+| Tool ran and failed (ticket not found, gateway error) | gateway `isError` / non-2xx | Error `tool_result`; the model says what failed and never invents the answer (system prompt). |
+| Relay refuses (guest, bad audience) | relay `401` | Sign-in dropped locally, spoken "Sign in to Wingman with your ForIT account…", panel opens on the account row. |
+
+Implementation: `CompanionManager.runModelTurnWithGatewayTools` (tool loop, at most 4 tool rounds per
+spoken question, then one forced answer with `tool_choice: none`), `WingmanToolCatalog` (allow-list +
+argument policy), `WingmanGatewayToolClient` (MCP Streamable HTTP with the user's `access_as_user`
+token). The relay forwards `tools` / `tool_use` / `tool_result` to Anthropic and never executes a tool.
 
 ## 5. Known gaps (reported to the Commander, owned elsewhere)
 

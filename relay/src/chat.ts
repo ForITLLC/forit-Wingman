@@ -1,10 +1,12 @@
 /**
  * POST /api/chat — authenticated passthrough to the Anthropic Messages API.
  *
- * The desktop app sends the same shape it would send to Anthropic (system, messages with text and
- * image blocks, max_tokens, stream). The relay adds the vendor key, pins the model to the
- * allow-list, and streams the SSE body straight back. It stores nothing: no prompts, no
- * screenshots, no completions. One log line per call records who, which model, and the status.
+ * The desktop app sends the same shape it would send to Anthropic (system, messages with text,
+ * image, tool_use and tool_result blocks, tool definitions, max_tokens, stream). The relay adds the
+ * vendor key, pins the model to the allow-list, and streams the SSE body straight back. It stores
+ * nothing: no prompts, no screenshots, no completions, no tool results. It never executes a tool:
+ * the app runs gateway tools itself with the user's own token (docs/PERMISSIONS.md). One log line
+ * per call records who, which model, how many tools were offered, and the status.
  */
 import { app, type HttpRequest, type HttpResponseInit, type InvocationContext } from "@azure/functions";
 import { getRelayConfig, type RelayConfig } from "./config.js";
@@ -16,6 +18,12 @@ const MAX_OUTPUT_TOKENS_CAP = 4096;
 const MAX_HISTORY_MESSAGES = 40;
 const MAX_IMAGE_BYTES_BASE64 = 8 * 1024 * 1024; // 8 MB of base64 per image, roughly a 6 MB PNG
 const SUPPORTED_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+// Tool use (docs/PERMISSIONS.md 3): the app describes a handful of for-mcp gateway tools to the
+// model and executes the calls itself with the user's own gateway token. The relay only forwards
+// the definitions and the tool_use / tool_result blocks; it never calls a tool.
+const MAX_TOOL_DEFINITIONS = 16;
+const MAX_TOOL_RESULT_CHARACTERS = 64 * 1024;
+const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 export interface WingmanChatTextBlock {
   type: "text";
@@ -27,10 +35,40 @@ export interface WingmanChatImageBlock {
   source: { type: "base64"; media_type: string; data: string };
 }
 
+/** The model asking the app to run a tool. Appears only in assistant turns. */
+export interface WingmanChatToolUseBlock {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/** The app's answer to a tool_use block. Appears only in user turns. */
+export interface WingmanChatToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string | WingmanChatTextBlock[];
+  is_error?: boolean;
+}
+
+export type WingmanChatContentBlock =
+  | WingmanChatTextBlock
+  | WingmanChatImageBlock
+  | WingmanChatToolUseBlock
+  | WingmanChatToolResultBlock;
+
 export interface WingmanChatMessage {
   role: "user" | "assistant";
-  content: string | Array<WingmanChatTextBlock | WingmanChatImageBlock>;
+  content: string | WingmanChatContentBlock[];
 }
+
+export interface WingmanToolDefinition {
+  name: string;
+  description?: string;
+  input_schema: { type: "object"; [key: string]: unknown };
+}
+
+export type WingmanToolChoice = { type: "auto" } | { type: "any" } | { type: "none" } | { type: "tool"; name: string };
 
 export interface WingmanChatRequest {
   model?: string;
@@ -39,6 +77,8 @@ export interface WingmanChatRequest {
   max_tokens?: number;
   temperature?: number;
   stream?: boolean;
+  tools?: WingmanToolDefinition[];
+  tool_choice?: WingmanToolChoice;
 }
 
 export interface AnthropicMessagesRequest {
@@ -48,6 +88,8 @@ export interface AnthropicMessagesRequest {
   max_tokens: number;
   temperature?: number;
   stream: boolean;
+  tools?: WingmanToolDefinition[];
+  tool_choice?: WingmanToolChoice;
 }
 
 export class ChatRequestError extends Error {
@@ -63,9 +105,46 @@ export function resolveModel(requestedModel: string | undefined, config: Pick<Re
   return config.defaultModel;
 }
 
-function validateContentBlock(block: WingmanChatTextBlock | WingmanChatImageBlock, messageIndex: number): void {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateContentBlock(block: WingmanChatContentBlock, messageIndex: number, role: "user" | "assistant"): void {
   if (block.type === "text") {
     if (typeof block.text !== "string") throw new ChatRequestError(`messages[${messageIndex}]: text block without text`);
+    return;
+  }
+  if (block.type === "tool_use") {
+    if (role !== "assistant") throw new ChatRequestError(`messages[${messageIndex}]: tool_use blocks belong to assistant turns`);
+    if (typeof block.id !== "string" || block.id.length === 0) throw new ChatRequestError(`messages[${messageIndex}]: tool_use block without id`);
+    if (typeof block.name !== "string" || !TOOL_NAME_PATTERN.test(block.name)) {
+      throw new ChatRequestError(`messages[${messageIndex}]: tool_use block with an invalid tool name`);
+    }
+    if (!isPlainObject(block.input)) throw new ChatRequestError(`messages[${messageIndex}]: tool_use input must be an object`);
+    return;
+  }
+  if (block.type === "tool_result") {
+    if (role !== "user") throw new ChatRequestError(`messages[${messageIndex}]: tool_result blocks belong to user turns`);
+    if (typeof block.tool_use_id !== "string" || block.tool_use_id.length === 0) {
+      throw new ChatRequestError(`messages[${messageIndex}]: tool_result block without tool_use_id`);
+    }
+    if (typeof block.content === "string") {
+      if (block.content.length > MAX_TOOL_RESULT_CHARACTERS) throw new ChatRequestError(`messages[${messageIndex}]: tool_result exceeds the relay size limit`);
+    } else if (Array.isArray(block.content)) {
+      let totalCharacters = 0;
+      for (const resultBlock of block.content) {
+        if (!isPlainObject(resultBlock) || resultBlock.type !== "text" || typeof resultBlock.text !== "string") {
+          throw new ChatRequestError(`messages[${messageIndex}]: tool_result content may only hold text blocks`);
+        }
+        totalCharacters += resultBlock.text.length;
+      }
+      if (totalCharacters > MAX_TOOL_RESULT_CHARACTERS) throw new ChatRequestError(`messages[${messageIndex}]: tool_result exceeds the relay size limit`);
+    } else {
+      throw new ChatRequestError(`messages[${messageIndex}]: tool_result content must be a string or text blocks`);
+    }
+    if (block.is_error !== undefined && typeof block.is_error !== "boolean") {
+      throw new ChatRequestError(`messages[${messageIndex}]: tool_result is_error must be a boolean`);
+    }
     return;
   }
   if (block.type === "image") {
@@ -104,13 +183,16 @@ export function buildAnthropicRequest(
     if (!Array.isArray(message.content) || message.content.length === 0) {
       throw new ChatRequestError(`messages[${messageIndex}]: content must be a string or a non-empty block array`);
     }
-    message.content.forEach((block) => validateContentBlock(block, messageIndex));
+    message.content.forEach((block) => validateContentBlock(block, messageIndex, message.role));
   });
   if (messages[messages.length - 1].role !== "user") throw new ChatRequestError("the last message must come from the user");
 
   if (wingmanRequest.system !== undefined && typeof wingmanRequest.system !== "string") {
     throw new ChatRequestError("system must be a string");
   }
+
+  const tools = validateToolDefinitions(wingmanRequest.tools);
+  const toolChoice = validateToolChoice(wingmanRequest.tool_choice, tools);
 
   const requestedMaxTokens = typeof wingmanRequest.max_tokens === "number" ? Math.floor(wingmanRequest.max_tokens) : 1024;
   const maxTokens = Math.min(Math.max(requestedMaxTokens, 1), MAX_OUTPUT_TOKENS_CAP);
@@ -125,7 +207,51 @@ export function buildAnthropicRequest(
   if (typeof wingmanRequest.temperature === "number") {
     anthropicRequest.temperature = Math.min(Math.max(wingmanRequest.temperature, 0), 1);
   }
+  if (tools) anthropicRequest.tools = tools;
+  if (toolChoice) anthropicRequest.tool_choice = toolChoice;
   return anthropicRequest;
+}
+
+function validateToolDefinitions(tools: unknown): WingmanToolDefinition[] | undefined {
+  if (tools === undefined) return undefined;
+  if (!Array.isArray(tools)) throw new ChatRequestError("tools must be an array");
+  if (tools.length === 0) return undefined;
+  if (tools.length > MAX_TOOL_DEFINITIONS) throw new ChatRequestError(`tools is limited to ${MAX_TOOL_DEFINITIONS} entries`);
+  const seenToolNames = new Set<string>();
+  return tools.map((tool, toolIndex) => {
+    if (!isPlainObject(tool)) throw new ChatRequestError(`tools[${toolIndex}]: must be an object`);
+    if (typeof tool.name !== "string" || !TOOL_NAME_PATTERN.test(tool.name)) {
+      throw new ChatRequestError(`tools[${toolIndex}]: name must match ${TOOL_NAME_PATTERN}`);
+    }
+    if (seenToolNames.has(tool.name)) throw new ChatRequestError(`tools[${toolIndex}]: duplicate tool name ${tool.name}`);
+    seenToolNames.add(tool.name);
+    if (tool.description !== undefined && typeof tool.description !== "string") {
+      throw new ChatRequestError(`tools[${toolIndex}]: description must be a string`);
+    }
+    if (!isPlainObject(tool.input_schema) || tool.input_schema.type !== "object") {
+      throw new ChatRequestError(`tools[${toolIndex}]: input_schema must be a JSON schema of type object`);
+    }
+    const toolDefinition: WingmanToolDefinition = {
+      name: tool.name,
+      input_schema: tool.input_schema as WingmanToolDefinition["input_schema"],
+    };
+    if (typeof tool.description === "string") toolDefinition.description = tool.description;
+    return toolDefinition;
+  });
+}
+
+function validateToolChoice(toolChoice: unknown, tools: WingmanToolDefinition[] | undefined): WingmanToolChoice | undefined {
+  if (toolChoice === undefined) return undefined;
+  if (!tools) throw new ChatRequestError("tool_choice requires tools");
+  if (!isPlainObject(toolChoice)) throw new ChatRequestError("tool_choice must be an object");
+  if (toolChoice.type === "auto" || toolChoice.type === "any" || toolChoice.type === "none") return { type: toolChoice.type };
+  if (toolChoice.type === "tool") {
+    if (typeof toolChoice.name !== "string" || !tools.some((tool) => tool.name === toolChoice.name)) {
+      throw new ChatRequestError("tool_choice names a tool that is not in tools");
+    }
+    return { type: "tool", name: toolChoice.name };
+  }
+  throw new ChatRequestError("tool_choice type must be auto, any, none or tool");
 }
 
 async function chatHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
@@ -178,7 +304,7 @@ async function chatHandler(request: HttpRequest, context: InvocationContext): Pr
     };
   }
 
-  context.log(`[chat] user=${user.email} model=${anthropicRequest.model} stream=${anthropicRequest.stream} status=${upstreamResponse.status} ms_to_first_byte=${Date.now() - startedAtMs}`);
+  context.log(`[chat] user=${user.email} model=${anthropicRequest.model} stream=${anthropicRequest.stream} tools=${anthropicRequest.tools?.length ?? 0} status=${upstreamResponse.status} ms_to_first_byte=${Date.now() - startedAtMs}`);
 
   if (anthropicRequest.stream) {
     return {
