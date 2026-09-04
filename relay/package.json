@@ -1,0 +1,23 @@
+{
+  "name": "wingman-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ForIT relay for the Wingman macOS app: Entra-authenticated passthrough to the model and TTS vendors. Holds the vendor keys so the desktop app never does.",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.11.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
