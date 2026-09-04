@@ -224,6 +224,13 @@ final class WingmanGatewayToolClient {
             throw WingmanGatewayToolError.invalidResponse(detail: "event stream is not UTF-8")
         }
 
+        // SSE lines end in CRLF, LF or CR. Swift's String treats "\r\n" as ONE Character, so a
+        // split on "\n" would never break a CRLF stream into lines (and a blank "\r\n" line would
+        // never be seen as the frame separator). Normalise every terminator to "\n" first.
+        let normalisedBodyText = bodyText
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
         // An SSE `data:` payload may span several `data:` lines within one frame; frames are
         // separated by a blank line.
         var currentFrameDataLines: [String] = []
@@ -239,8 +246,8 @@ final class WingmanGatewayToolClient {
             }
         }
 
-        for rawLine in bodyText.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : String(rawLine)
+        for rawLine in normalisedBodyText.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
             if line.isEmpty {
                 finishFrame()
             } else if line.hasPrefix("data:") {
