@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   SCHEME: Wingman
   PROJECT: Wingman.xcodeproj
@@ -36,6 +40,7 @@ jobs:
       - name: Unit tests (WingmanTests only; UI tests need a signed in desktop session)
         run: |
           set -o pipefail
+          mkdir -p build
           xcodebuild test \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
