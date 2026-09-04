@@ -4,5 +4,13 @@
         <title>Wingman</title>
         <link>https://github.com/ForITLLC/forit-Wingman</link>
         <description>Wingman release feed. Items are appended by the ci workflow on every main build once the Sparkle signing secret is present.</description>
+        <item>
+            <title>0.1.6</title>
+            <pubDate>Fri, 04 Sep 2026 20:37:54 +0000</pubDate>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/ForITLLC/forit-Wingman/releases/download/v0.1.6/Wingman-0.1.6.dmg" length="1867774" type="application/octet-stream" sparkle:edSignature="2SgRIXNmpTBeMMLAsMFoh5NyC8qR977fKneA83Jb3uU2+qE180Y5MnDWbKo5R5xnCNzpB82fO1fFgquDhwS2DQ=="/>
+        </item>
     </channel>
 </rss>
