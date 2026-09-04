@@ -148,8 +148,10 @@ jobs:
           # Independent check: the signature must verify against the SUPublicEDKey shipped in Info.plist.
           PUBLIC_KEY=$(/usr/libexec/PlistBuddy -c "Print SUPublicEDKey" Wingman/Info.plist)
           SIGNATURE=$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' build/sparkle-signature.txt)
-          python3 -m pip install --quiet cryptography
-          python3 - "$DMG" "$PUBLIC_KEY" "$SIGNATURE" <<'PY'
+          # The runner's Homebrew Python refuses system-wide installs (PEP 668), so use a venv.
+          python3 -m venv build/pyvenv
+          build/pyvenv/bin/python -m pip install --quiet cryptography
+          build/pyvenv/bin/python - "$DMG" "$PUBLIC_KEY" "$SIGNATURE" <<'PY'
           import base64, sys
           from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
           dmg_path, public_key_b64, signature_b64 = sys.argv[1:4]
