@@ -97,6 +97,13 @@ enum WingmanAnalytics {
         record("element_pointed", properties: ["element_label": elementLabel ?? "unknown"])
     }
 
+    // MARK: - Sign-in
+
+    /// The user completed an interactive ForIT sign-in. No account details are recorded.
+    static func trackSignedIn() {
+        record("signed_in")
+    }
+
     // MARK: - Errors
 
     /// An error occurred during the model response pipeline.

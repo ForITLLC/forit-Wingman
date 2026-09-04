@@ -2,9 +2,10 @@
 //  ElevenLabsTTSClient.swift
 //  Wingman
 //
-//  Streams text-to-speech audio from ElevenLabs and plays it back
-//  through the system audio output. Uses the streaming endpoint so
-//  playback begins before the full audio has been generated.
+//  Speaks the model's reply. First choice is ElevenLabs through the relay's /api/tts
+//  (ForIT's key and voice stay server-side). When the relay reports that TTS is not
+//  configured (501), the reply is spoken on-device with AVSpeechSynthesizer instead, so
+//  the app is never silent because a vendor is switched off.
 //
 
 import AVFoundation
@@ -12,52 +13,71 @@ import Foundation
 
 @MainActor
 final class ElevenLabsTTSClient {
-    private let proxyURL: URL
+    private let relayTTSURL: URL
+    private let bearerTokenProvider: WingmanBearerTokenProvider
     private let session: URLSession
 
     /// The audio player for the current TTS playback. Kept alive so the
     /// audio finishes playing even if the caller doesn't hold a reference.
     private var audioPlayer: AVAudioPlayer?
 
-    init(proxyURL: String) {
-        self.proxyURL = URL(string: proxyURL)!
+    private let onDeviceSpeechSynthesizer = AVSpeechSynthesizer()
+
+    /// Set the first time the relay answers 501 so later replies skip the round trip and go
+    /// straight to on-device speech for the rest of this run.
+    private var hasRelayReportedTTSUnavailable = false
+
+    init(relayTTSURL: URL, bearerTokenProvider: @escaping WingmanBearerTokenProvider) {
+        self.relayTTSURL = relayTTSURL
+        self.bearerTokenProvider = bearerTokenProvider
 
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 60
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
         self.session = URLSession(configuration: configuration)
     }
 
-    /// Sends `text` to ElevenLabs TTS and plays the resulting audio.
-    /// Throws on network or decoding errors. Cancellation-safe.
+    /// Speaks `text`, via the relay when it offers TTS and on-device otherwise.
+    /// Throws on network or decoding errors other than "TTS not configured". Cancellation-safe.
     func speakText(_ text: String) async throws {
-        var request = URLRequest(url: proxyURL)
+        if !hasRelayReportedTTSUnavailable {
+            do {
+                try await speakThroughRelay(text)
+                return
+            } catch WingmanRelayError.relayRejected(let statusCode, _) where statusCode == 501 {
+                hasRelayReportedTTSUnavailable = true
+                print("🔊 TTS: relay reports no voice configured; using on-device speech from now on")
+            }
+        }
+
+        try Task.checkCancellation()
+        speakOnDevice(text)
+    }
+
+    private func speakThroughRelay(_ text: String) async throws {
+        let bearerToken = try await bearerTokenProvider()
+
+        var request = URLRequest(url: relayTTSURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("audio/mpeg", forHTTPHeaderField: "Accept")
-
-        let body: [String: Any] = [
-            "text": text,
-            "model_id": "eleven_flash_v2_5",
-            "voice_settings": [
-                "stability": 0.5,
-                "similarity_boost": 0.75
-            ]
-        ]
-
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
 
         let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw NSError(domain: "ElevenLabsTTS", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+            throw WingmanRelayError.invalidResponse
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "ElevenLabsTTS", code: httpResponse.statusCode,
-                          userInfo: [NSLocalizedDescriptionKey: "TTS API error (\(httpResponse.statusCode)): \(errorBody)"])
+            let errorMessage = WingmanRelayError.message(fromRelayBody: String(data: data, encoding: .utf8) ?? "")
+            if httpResponse.statusCode == 401 {
+                throw WingmanRelayError.notAuthorized(message: errorMessage)
+            }
+            throw WingmanRelayError.relayRejected(statusCode: httpResponse.statusCode, message: errorMessage)
         }
 
         try Task.checkCancellation()
@@ -65,17 +85,28 @@ final class ElevenLabsTTSClient {
         let player = try AVAudioPlayer(data: data)
         self.audioPlayer = player
         player.play()
-        print("🔊 ElevenLabs TTS: playing \(data.count / 1024)KB audio")
+        print("🔊 Relay TTS: playing \(data.count / 1024)KB audio")
     }
 
-    /// Whether TTS audio is currently playing back.
+    private func speakOnDevice(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        onDeviceSpeechSynthesizer.speak(utterance)
+        print("🔊 On-device TTS: speaking \(text.count) characters")
+    }
+
+    /// Whether TTS audio is currently playing back (from either source).
     var isPlaying: Bool {
-        audioPlayer?.isPlaying ?? false
+        (audioPlayer?.isPlaying ?? false) || onDeviceSpeechSynthesizer.isSpeaking
     }
 
     /// Stops any in-progress playback immediately.
     func stopPlayback() {
         audioPlayer?.stop()
         audioPlayer = nil
+        if onDeviceSpeechSynthesizer.isSpeaking {
+            onDeviceSpeechSynthesizer.stopSpeaking(at: .immediate)
+        }
     }
 }

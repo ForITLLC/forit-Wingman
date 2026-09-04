@@ -12,6 +12,13 @@ import SwiftUI
 
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
+    // Observed on its own: SwiftUI does not re-render for changes inside a nested ObservableObject.
+    @ObservedObject private var signInManager: WingmanEntraSignInManager
+
+    init(companionManager: CompanionManager) {
+        self._companionManager = ObservedObject(wrappedValue: companionManager)
+        self._signInManager = ObservedObject(wrappedValue: companionManager.signInManager)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,6 +29,12 @@ struct CompanionPanelView: View {
 
             permissionsCopySection
                 .padding(.top, 16)
+                .padding(.horizontal, 16)
+
+            Spacer()
+                .frame(height: 12)
+
+            accountSection
                 .padding(.horizontal, 16)
 
             if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
@@ -539,6 +552,100 @@ struct CompanionPanelView: View {
         .padding(.vertical, 4)
     }
 
+    // MARK: - Account
+
+    /// Who is signed in, or how to sign in. Wingman does nothing without a ForIT account:
+    /// the relay refuses anonymous calls and the app refuses to capture without one.
+    private var accountSection: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "person.crop.circle")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(DS.Colors.textTertiary)
+                .frame(width: 16)
+
+            switch signInManager.signInState {
+            case .signedOut:
+                Text("Not signed in")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+
+                Spacer()
+
+                signInButton(title: "Sign in with Microsoft")
+
+            case .signingIn:
+                Text("Finish signing in in your browser")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+
+                Spacer()
+
+                ProgressView()
+                    .controlSize(.small)
+
+            case .signedIn(let account):
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(account.displayName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+                        .lineLimit(1)
+                    Text(account.emailAddress)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                Button(action: {
+                    signInManager.signOut()
+                }) {
+                    Text("Sign out")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+
+            case .failed(let failureMessage):
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Sign-in needed")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+                    Text(failureMessage)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                signInButton(title: "Try again")
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func signInButton(title: String) -> some View {
+        Button(action: {
+            Task {
+                await signInManager.signIn()
+            }
+        }) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(DS.Colors.textPrimary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(DS.Colors.accent)
+                )
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+
     // MARK: - Model Picker
 
     private var modelPickerRow: some View {
@@ -550,8 +657,9 @@ struct CompanionPanelView: View {
             Spacer()
 
             HStack(spacing: 0) {
-                modelOptionButton(label: "Sonnet", modelID: "claude-sonnet-4-6")
-                modelOptionButton(label: "Opus", modelID: "claude-opus-4-6")
+                ForEach(WingmanServiceConfiguration.selectableModels, id: \.modelId) { selectableModel in
+                    modelOptionButton(label: selectableModel.label, modelID: selectableModel.modelId)
+                }
             }
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -632,6 +740,9 @@ struct CompanionPanelView: View {
     }
 
     private var statusDotColor: Color {
+        if !signInManager.isSignedIn {
+            return DS.Colors.textTertiary
+        }
         if !companionManager.isOverlayVisible {
             return DS.Colors.textTertiary
         }
@@ -646,6 +757,9 @@ struct CompanionPanelView: View {
     }
 
     private var statusText: String {
+        if !signInManager.isSignedIn {
+            return "Sign in"
+        }
         if !companionManager.hasCompletedOnboarding || !companionManager.allPermissionsGranted {
             return "Setup"
         }

@@ -52,8 +52,7 @@ lists all four and links to the right System Settings pane.
 | `Wingman/` | The macOS app (SwiftUI + AppKit bridging). The root `AGENTS.md` describes each source file. |
 | `WingmanTests/` | Unit tests. |
 | `WingmanUITests/` | UI test scaffold, not run in CI. |
-| `relay/` | ForIT relay (Azure Functions) that fronts the model and holds no user data. Arrives with the backend swap. |
-| `worker/` | Upstream Cloudflare Worker proxy, kept only until the relay replaces it. |
+| `relay/` | ForIT relay (Azure Functions) that fronts the model and speech vendors, checks the user's ForIT sign-in on every call, and holds no user data. |
 | `docs/` | Dependency inventory, permissions, architecture notes. |
 | `.ai/` | Decision log. |
 
