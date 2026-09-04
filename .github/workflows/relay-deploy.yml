@@ -134,8 +134,16 @@ jobs:
 
       - name: Prove the auth gate (no token → 401, never 200)
         run: |
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST \
-            -H "content-type: application/json" -d '{"messages":[{"role":"user","content":"ping"}]}' \
-            "$RELAY_BASE_URL/api/chat")
-          echo "POST /api/chat without a token: HTTP $CODE"
+          # /api/health answers as soon as the host is up, but the HTTP functions register a few
+          # seconds later (trigger sync after the zip deploy); until then /api/chat is a 404, not a
+          # 401. Run 33920368006 hit exactly that race, so poll for the 401 instead of asserting once.
+          CODE=000
+          for attempt in $(seq 1 24); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST \
+              -H "content-type: application/json" -d '{"messages":[{"role":"user","content":"ping"}]}' \
+              "$RELAY_BASE_URL/api/chat" || true)
+            echo "attempt $attempt: POST /api/chat without a token: HTTP $CODE"
+            if [ "$CODE" = "401" ]; then break; fi
+            sleep 5
+          done
           test "$CODE" = "401"

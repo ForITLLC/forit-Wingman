@@ -25,6 +25,10 @@ enum WingmanServiceConfiguration {
     /// token for this audience; the relay never sees it.
     static let gatewayApplicationIdURI = "api://861db494-6d36-4d7d-83c4-39352d3e9576"
 
+    /// The gateway's MCP endpoint (Streamable HTTP). Support and flight tools are called here
+    /// directly by the app with the user's gateway token (docs/PERMISSIONS.md).
+    static let gatewayMCPURL = URL(string: "https://for-mcp.graycoast-522b9cfd.eastus.azurecontainerapps.io/mcp")!
+
     /// One sign-in yields both tokens the app needs: the id_token (audience = this client,
     /// presented to the relay) and an access token for the gateway (`access_as_user`; the user's gateway
     /// app role, Reader / Writer / Admin, decides which tools that token may call).
