@@ -1,11 +1,11 @@
-# Clicky - Agent Instructions
+# Wingman - Agent Instructions
 
 <!-- This is the single source of truth for all AI coding agents. CLAUDE.md is a symlink to this file. -->
 <!-- AGENTS.md spec: https://github.com/agentsmd/agents.md — supported by Claude Code, Cursor, Copilot, Gemini CLI, and others. -->
 
 ## Overview
 
-macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it via AssemblyAI streaming, and sends the transcript + a screenshot of the user's screen to Claude. Claude responds with text (streamed via SSE) and voice (ElevenLabs TTS). A blue cursor overlay can fly to and point at UI elements Claude references on any connected monitor.
+ForIT's macOS menu bar voice assistant for support work, derived from Clicky (MIT, see NOTICE). Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it via AssemblyAI streaming, and sends the transcript + a screenshot of the user's screen to Claude. Claude responds with text (streamed via SSE) and voice (ElevenLabs TTS). A blue cursor overlay can fly to and point at UI elements Claude references on any connected monitor.
 
 All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in the app.
 
@@ -21,7 +21,7 @@ All API keys live on a Cloudflare Worker proxy — nothing sensitive ships in th
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
 - **Element Pointing**: Claude embeds `[POINT:x,y:label:screenN]` tags in responses. The overlay parses these, maps coordinates to the correct monitor, and animates the blue cursor along a bezier arc to the target.
 - **Concurrency**: `@MainActor` isolation, async/await throughout
-- **Analytics**: PostHog via `ClickyAnalytics.swift`
+- **Analytics**: local debug log only via `WingmanAnalytics.swift` (no third-party SDK; nothing leaves the machine)
 
 ### API Proxy (Cloudflare Worker)
 
@@ -46,13 +46,13 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 
 **Shared URLSession for AssemblyAI**: A single long-lived `URLSession` is shared across all AssemblyAI streaming sessions (owned by the provider, not the session). Creating and invalidating a URLSession per session corrupts the OS connection pool and causes "Socket is not connected" errors after a few rapid reconnections.
 
-**Transient Cursor Mode**: When "Show Clicky" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
+**Transient Cursor Mode**: When "Show Wingman" is off, pressing the hotkey fades in the cursor overlay for the duration of the interaction (recording → response → TTS → optional pointing), then fades it out automatically after 1 second of inactivity.
 
 ## Key Files
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
+| `WingmanApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
 | `CompanionManager.swift` | ~1026 | Central state machine. Owns dictation, shortcut monitoring, screen capture, Claude API, ElevenLabs TTS, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, and cursor visibility. Coordinates the full push-to-talk → screenshot → Claude → TTS → pointing pipeline. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |
 | `CompanionPanelView.swift` | ~761 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, model picker (Sonnet/Opus), permissions UI, DM feedback button, and quit button. Dark aesthetic using `DS` design system. |
@@ -71,7 +71,7 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `ElevenLabsTTSClient.swift` | ~81 | ElevenLabs TTS client. Sends text to the Worker proxy, plays back audio via `AVAudioPlayer`. Exposes `isPlaying` for transient cursor scheduling. |
 | `ElementLocationDetector.swift` | ~335 | Detects UI element locations in screenshots for cursor pointing. |
 | `DesignSystem.swift` | ~880 | Design system tokens — colors, corner radii, shared styles. All UI references `DS.Colors`, `DS.CornerRadius`, etc. |
-| `ClickyAnalytics.swift` | ~121 | PostHog analytics integration for usage tracking. |
+| `WingmanAnalytics.swift` | ~110 | Local analytics wrapper: same static API upstream used for PostHog, now `os.Logger` debug lines only. |
 | `WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
 | `AppBundleConfiguration.swift` | ~28 | Runtime configuration reader for keys stored in the app bundle Info.plist. |
 | `worker/src/index.ts` | ~142 | Cloudflare Worker proxy. Three routes: `/chat` (Claude), `/tts` (ElevenLabs), `/transcribe-token` (AssemblyAI temp token). |
@@ -80,9 +80,9 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 
 ```bash
 # Open in Xcode
-open leanring-buddy.xcodeproj
+open Wingman.xcodeproj
 
-# Select the leanring-buddy scheme, set signing team, Cmd+R to build and run
+# Select the Wingman scheme (shared, ad-hoc signed, no team needed), Cmd+R to build and run
 
 # Known non-blocking warnings: Swift 6 concurrency warnings,
 # deprecated onChange warning in OverlayWindow.swift. Do NOT attempt to fix these.
@@ -142,7 +142,6 @@ IMPORTANT: Follow these naming rules strictly. Clarity is the top priority.
 - Do not add features, refactor code, or make "improvements" beyond what was asked
 - Do not add docstrings, comments, or type annotations to code you did not change
 - Do not try to fix the known non-blocking warnings (Swift 6 concurrency, deprecated onChange)
-- Do not rename the project directory or scheme (the "leanring" typo is intentional/legacy)
 - Do not run `xcodebuild` from the terminal — it invalidates TCC permissions
 
 ## Git Workflow
@@ -165,3 +164,14 @@ When you make changes to this project that affect the information in this file, 
 6. **Line count drift**: If a file's line count changes significantly (>50 lines), update the approximate count in the Key Files table
 
 Do NOT update this file for minor edits, bug fixes, or changes that don't affect the documented architecture or conventions.
+
+## Rename and provenance (2026-09-04)
+
+- Targets, directories, bundle ids (`io.forit.wingman`, `.tests`, `.uitests`), display name and scheme are `Wingman`.
+- Removed from upstream: PostHog SDK, FormSpark email capture, the hosted Mux intro video, the "DM Farza" button,
+  bundled game-soundtrack mp3s, the Codex/makesomething image sets, per-user `xcuserdata`, `scripts/release.sh`.
+- Sparkle feed is `https://raw.githubusercontent.com/ForITLLC/forit-Wingman/main/appcast.xml`; the EdDSA private key
+  is the `SPARKLE_PRIVATE_KEY` repo secret and the matching public key is in `Info.plist`. The updater start is still
+  commented out in `WingmanApp.swift` (upstream state) until the first signed release is verified.
+- CI: `.github/workflows/ci.yml` (jobs `test` and `build`), ad-hoc signed, unsigned DMG artifacts, GitHub release on main.
+- Decision log: `.ai/decisions.md`. Dependency inventory: `docs/UPSTREAM-DEPENDENCIES.md`. Permissions: `docs/PERMISSIONS.md`.

@@ -72,10 +72,16 @@ signed-in user and be scoped server-side (goal item 4).
 
 - New Azure resources: `rg-forit-wingman`, `wingman-func` (consumption plan), `kv-forit-wingman`,
   storage account, App Insights. Provisioned by the deploy workflow with the OIDC deploy identity.
-- Secret to provision: `anthropic-api-key` in `kv-forit-wingman` (a ForIT Anthropic key; the AI Engine's
-  copy lives in its Function App settings and the KV copy there is stale —
-  `for-AI/docs/plans/2026-07-27-keyvault-migration-plan.md:41-44`). Provisioning is a pipeline step from
-  1Password, never a portal paste. Optional: `elevenlabs-api-key`.
+- **Key provenance (hard line from WO#1907-R2):** the relay uses an Anthropic key ForIT **already holds**.
+  Source of truth today: the `ANTHROPIC_API_KEY` application setting on Function App `forit-ai-engine`
+  (subscription `147a19b0-f6a7-4b0b-89e9-49f4aabd1435`; `for-AI/platform/src/config.ts:67`). The copy in
+  Key Vault `forit-ai-secrets/anthropic-api-key` is **stale since 2026-03-03** and must not be used
+  (`for-AI/docs/plans/2026-07-27-keyvault-migration-plan.md:41-44`). The live value is copied into
+  `kv-forit-wingman/anthropic-api-key` by the provisioning pipeline, never a portal paste. No new Anthropic
+  account, organisation, billing or top-up is created for Wingman; if the held key is unusable, that is a
+  money step reported to the Commander, not worked around. Same rule for ElevenLabs: reuse the
+  `ELEVENLABS_API_KEY` setting on the same Function App into `kv-forit-wingman/elevenlabs-api-key`, or ship
+  with on-device TTS only.
 - Two Entra app registrations are needed: Wingman API (exposes `access_as_user`) and Wingman desktop
   public client (PKCE, redirect `msauth.io.forit.wingman://auth`). Both are ForIT-tenant, guests rejected.
   The desktop client must also be pre-authorised on the gateway API `861db494…` for a delegated scope —

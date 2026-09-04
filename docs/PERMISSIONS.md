@@ -57,8 +57,10 @@ never described to the model, so the model cannot call it even if the gateway wo
    `SUPPORT_API_KEY` (`for-mcp/manifests/support.json:5-7`, `server.py:1368-1376`); `tenant` is a filter the
    caller supplies, not a constraint derived from the user. A Viewer at one client could, in principle, ask
    about another client's tickets. The fix is gateway-side (`for-mcp/docs/per-user-rbac.md`, phases 1-3,
-   unbuilt, Ben-gated). Until then Wingman is **ForIT staff only**: the relay rejects any UPN outside
-   `@forit.io`. Owner: for-mcp / for-Support.
+   unbuilt, Ben-gated; routed by the Commander as WO#1908). **INTERIM for phase 1, accepted by the Commander
+   2026-09-04, not the design:** Wingman is **ForIT staff only** and the relay rejects any UPN outside
+   `@forit.io`. The design is per-user identity pass-through on `support_*`; when WO#1908 lands, the UPN
+   filter comes out and no Wingman code changes. Owner: for-mcp / for-Support.
 2. **No delegated scope for a native client on the gateway app.** The gateway's registration exposes app
    roles but its OAuth flow is locked to claude.ai redirects (`server.py:320-325`). Wingman needs an
    `access_as_user` delegated scope on `api://861db494…` with the Wingman desktop client pre-authorised.

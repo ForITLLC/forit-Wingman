@@ -1,7 +1,11 @@
 worker/node_modules/
 worker/.dev.vars
+relay/node_modules/
+relay/dist/
+relay/local.settings.json
 .DS_Store
 *.xcuserstate
+xcuserdata/
 build/
 releases/
 .claude/
