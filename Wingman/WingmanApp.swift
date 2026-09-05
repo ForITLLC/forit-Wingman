@@ -31,6 +31,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarPanelManager: MenuBarPanelManager?
     private let companionManager = CompanionManager()
     private var sparkleUpdaterController: SPUStandardUpdaterController?
+    /// Retries a background update check that failed on the network (decision 019). Sparkle
+    /// holds its delegate weakly, so this object lives here.
+    private let updateCheckRetryDelegate = WingmanUpdateCheckRetryDelegate()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🎯 Wingman: Starting...")
@@ -62,7 +65,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private func startSparkleUpdater() {
         let updaterController = SPUStandardUpdaterController(
             startingUpdater: false,
-            updaterDelegate: nil,
+            updaterDelegate: updateCheckRetryDelegate,
             userDriverDelegate: nil
         )
         self.sparkleUpdaterController = updaterController

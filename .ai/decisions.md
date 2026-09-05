@@ -935,3 +935,33 @@ basis for it and no reason to be asked.
 - ForIT changes the model in one place and every Wingman follows on its next question.
 - A Mac that had Opus selected goes back to the relay default; nothing tells the person, because
   nothing was ever theirs to choose.
+
+## 019 — A background update check that fails on the network is retried in five minutes
+
+**Date:** 2026-09-05
+**Status:** Accepted
+
+### Context
+
+Ben, 2026-09-05: "Have you pushed the latest to my MacBook yet?" His MacBook had been on 0.1.68
+since 21:09Z while 0.1.76 and 0.1.78 sat in the appcast. Its log showed why: the hourly Sparkle
+check at 22:08:28Z ended with "The Internet connection appears to be offline" on the appcast fetch
+(Tailscale was restarting two minutes later), and Sparkle records `SULastCheckTime` even then, so
+the next look was not until 23:08Z. A check that lands in a network blip cost a whole hour.
+
+### Decision
+
+- The app delegate gives Sparkle an updater delegate (`WingmanUpdateCheckRetryDelegate`). When a
+  background check ends with a Sparkle appcast or download error, or anything with a URL loading
+  error underneath, it asks Sparkle for another background check five minutes later. One retry is
+  pending at a time; a retry that fails again schedules the next.
+- "No update available", a bad signature and installation errors are not retried: asking the feed
+  again does not change them.
+- The Mac log gets `update_check_retry_scheduled delay_s=300` at notice level, so `log show`
+  explains a late update.
+
+### Consequences
+
+- An outage of hours costs one small request every five minutes.
+- Nothing changes for a person: the retry is silent, and the install still happens at the next
+  quit as before.
