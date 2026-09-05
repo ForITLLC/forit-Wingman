@@ -27,7 +27,8 @@ root, `.ai/decisions.md`.
                                         ▼
                                    for-mcp gateway (Container App, MCP Streamable HTTP)
                                     support_listTickets · support_addTicketNote · forit_avops_search_flights
-                                    role check + audit under the signed-in person
+                                    support_searchKbArticles · support_getKbArticle (once for-Support ships them)
+                                    role check + audit under the signed-in person; tools/list narrows the catalog
 ```
 
 | Component | Where it runs | Holds | Never holds |

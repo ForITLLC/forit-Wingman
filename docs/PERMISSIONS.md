@@ -37,10 +37,15 @@ Role assignment is an Entra enterprise-app assignment, done by a ForIT admin, ne
 | "Summarise ticket `<n>` and what is blocking it" | `support_listTickets` (by id) | Viewer | none |
 | "Draft a reply to ticket `<n>`" | `support_addTicketNote` | Operator | Writes an **internal note prefixed `DRAFT (Wingman):`** on the ticket. Never `support_replyToTicket`, never an email. |
 | "What is the status of flight `<id>`?" | `forit_avops_search_flights` | Viewer | none |
+| "How do I `<do something>` in FL3XX?" (or any supported system) | `support_searchKbArticles`, then `support_getKbArticle` | Viewer | none. Searches the `forit` tenant's published articles unless the user names a client; the app fixes the default tenant, the model cannot widen it. |
 | Anything that sends, deletes, assigns, bulk-updates, or provisions | `support_replyToTicket`, `support_deleteTicket`, `support_assignTicket`, `support_bulkUpdateTickets`, `support_provisioning*` | **not exposed** | Wingman does not register these tools with the model at all. |
 
 The tool allow-list is a static array in the app (`WingmanToolCatalog.swift`); a tool not on it is
-never described to the model, so the model cannot call it even if the gateway would allow it.
+never described to the model, so the model cannot call it even if the gateway would allow it. The
+list is also narrowed, per turn, to what the gateway's `tools/list` exposes to the signed-in person
+(cached 15 minutes per account): a catalog tool the gateway does not have yet is not described to
+the model at all, so it cannot be "called and fail". If `tools/list` fails, the whole catalog is
+offered and a missing tool surfaces as an error `tool_result`.
 
 ## 4. Refusals in the UI
 
@@ -84,3 +89,11 @@ token). The relay forwards `tools` / `tool_use` / `tool_result` to Anthropic and
    provisioning tools through Wingman is the app's own static allow-list (section 3), which is why that list
    is compiled in and not configurable. Reported to the Commander 2026-09-04 as part of WO#1908.
    Owner: for-mcp.
+5. **The knowledge base read tools do not exist on for-Support / the gateway yet.** Wingman describes
+   `support_searchKbArticles` and `support_getKbArticle` to the model only once the gateway's `tools/list`
+   exposes them; until then the model is told that part is not connected. The contract for-Support has to
+   implement (two read-only bearer-authenticated routes on the admin API, auto-mounted by the gateway from
+   the OpenAPI spec) is `docs/common-proposed/for-support-kb-read-api.md`. The `forit` tenant's knowledge
+   base also holds no FL3XX articles today; the same document proposes seeding it from the `for-FL3XX`
+   mirror, which is a Ben decision (FL3XX's own help-centre text, staff-facing use only). Owner: for-Support
+   (routes, content), for-mcp (spec refresh).
