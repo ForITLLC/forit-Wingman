@@ -128,7 +128,8 @@ Grep of the for-Support repo and a ticket search (`support_listTickets search=fl
 return nothing FL3XX. Without articles the tools work and the model correctly says "the knowledge base
 has nothing on that yet".
 
-Proposed seed, **Ben decision, not pre-cleared**: the `for-FL3XX` repo (session 39b72bf0d2b7432a,
+Seed, **decided GO by Ben on 2026-09-05** ("for-fl3xx seeded no?" on top of "get those ready to answer Flex
+questions"), routed to for-Support through the Commander the same day and not yet imported: the `for-FL3XX` repo (session 39b72bf0d2b7432a,
 `~/GitProjects/for-FL3XX`) holds `kb/fl3xx-knowledge-base/markdown/` — 442 markdown pages mirrored from
 `https://www.fl3xx.com/kb/…`, each starting with an H1 and a `Source:` line — and
 `kb/fl3xx-developer-portal/` (315 pages from `developer.fl3xx.com`). A one-off importer (for-Support side,
@@ -146,13 +147,17 @@ release-note pages, 1 marketing page (`private-cloud-solutions-at-fl3xx`) and 1 
 the privacy policy, video tutorials, service-description pages) are kept but flagged there so the set can be
 tightened in one edit. The importer reads that file; it does not decide page by page.
 
-One thing only Ben can decide, so it is flagged rather than done: **the text is FL3XX's.** Keeping an
-internal, staff-facing mirror that answers ForIT's own support staff and links back to the FL3XX source is
-the normal reseller / support-partner practice; publishing it on `support.forit.io` as ForIT articles visible
-to clients is not. Recommendation: import with the most restrictive `visibility` for-Support offers
-(staff-only), keep the source link, and let ForIT-written articles (ForIT's own FL3XX procedures for Planet
-Nine, gotchas, workarounds) be the ones that go public. No import has been performed and nothing has been
-written to for-Support; the set is ready for the day Ben says yes.
+**The text is FL3XX's, and Ben's constraint (2026-09-05, verbatim) is "nothing should be public".** The
+import is a staff-facing internal mirror that answers ForIT's own support staff and links back to the FL3XX
+source; it must never render on the public knowledge base of any tenant host. That adds three requirements to
+the for-Support work order: (1) if for-Support has no staff-only / internal visibility today, add one and
+import with it; (2) the two bearer read routes above must return internal articles (today they filter
+`status = 'published'` only) while the public KB pages exclude them; (3) `url` must not point at a public page
+for an internal article (admin URL, or omit it). Proof from for-Support: the public slug URL is hidden or
+`404` and the gateway search returns the article. ForIT-written articles (ForIT's own FL3XX procedures for
+Planet Nine, gotchas, workarounds) remain the only ones that could ever be public. Wingman needs no change:
+it reads through the gateway only and passes `url` through unchanged. Nothing has been imported yet; the
+work order is with for-Support via the Commander (card 74DEAEBA).
 
 ## Verification once shipped
 
@@ -168,7 +173,9 @@ written to for-Support; the set is ready for the day Ben says yes.
    now fall through to the admin host, client custom hosts stay verbatim. Re-checked through the gateway after
    the fix: `https://support.forit.io/forit/kb/<slug>`, as in the example above. Wingman passes the value
    through unchanged.
-3. **Pending, needs Ben's Mac.** In Wingman (signed in as ForIT staff): "how do I turn on TSA screening in
+3. **Done in part on Ben's Mac (2026-09-05).** A question about an existing `forit` article worked end to end:
+   the model searched, read and spoke the Pax8 article (Ben: "it worked, it read the pax8 article"). Still to run
+   once the FL3XX import lands: in Wingman (signed in as ForIT staff): "how do I turn on TSA screening in
    FL3XX" → the model calls search, then get, names the article, and does not describe steps the article does
    not contain. With the KB as it is today the same question gets "the knowledge base has nothing on that yet".
 

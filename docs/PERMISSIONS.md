@@ -99,7 +99,10 @@ token). The relay forwards `tools` / `tool_use` / `tool_result` to Anthropic and
    tenant is `404`, an article read carries `tenant_slug` and `url`, an unknown id is `404`. The contract as
    shipped is `docs/common-proposed/for-support-kb-read-api.md`. Still open: (a) the `forit` tenant holds
    **no FL3XX articles**, so the model correctly says the knowledge base has nothing on that yet; seeding it
-   from the `for-FL3XX` mirror (curated set, for-FL3XX `46244dc`) is a Ben decision; (b) for-Support proved
+   from the `for-FL3XX` mirror (curated set, for-FL3XX `46244dc`) was decided GO by Ben on 2026-09-05 with one
+   hard constraint, verbatim "nothing should be public": the import is staff-only, never rendered on the public
+   KB of any host, and the read routes must return those internal articles; routed to for-Support through the
+   Commander, not yet imported; (b) for-Support proved
    the routes with the shared `SUPPORT_API_KEY` bearer only, which is the path the gateway uses today (gap 1),
-   so per-user scoping of KB reads arrives with WO#1908 like every other `support_*` call. Owner: Ben
-   (seeding decision), for-Support (import), for-mcp (WO#1908).
+   so per-user scoping of KB reads arrives with WO#1908 like every other `support_*` call. Owner: for-Support
+   (import + internal visibility), for-mcp (WO#1908).
