@@ -69,6 +69,15 @@ struct WingmanPreparedToolCall {
     let arguments: [String: Any]
 }
 
+/// The knowledge base article an answer was read from, as the app saw it in the
+/// `support_getKbArticle` result: the title and the ForIT Support page for it. The answer cites
+/// the page in its Source line; the panel shows this with an Open button, because the overlay
+/// bubble is click-through (decision 012).
+struct WingmanKnowledgeBaseArticleCitation: Equatable {
+    let title: String
+    let url: URL
+}
+
 enum WingmanToolCatalog {
     /// Every note Wingman writes starts with this, so nobody mistakes it for a sent reply.
     static let draftNotePrefix = "DRAFT (Wingman): "
@@ -162,12 +171,13 @@ enum WingmanToolCatalog {
         ),
         WingmanToolDescriptor(
             name: searchKnowledgeBaseToolName,
-            description: "Search the ForIT support knowledge base: how-to and reference articles for the systems ForIT supports, including FL3XX (the flight operations and scheduling platform) and ForIT's own products. Call this before answering any \"how do I\", \"where is\", \"why does\" or setup question about FL3XX or another supported system; never describe a procedure from memory. Returns the best-matching published articles with article_id, title, summary and a link. Then read the best match with \(readKnowledgeBaseArticleToolName) before answering.",
+            description: "Search the ForIT support knowledge base: how-to and reference articles for the systems ForIT supports, including FL3XX (the flight operations and scheduling platform) and ForIT's own products. Call this before answering any \"how do I\", \"where is\", \"why does\" or setup question about FL3XX or another supported system; never describe a procedure from memory. Returns the best-matching published articles with article_id, title, summary and url (the ForIT Support page for the article, which the answer cites). Then read the best match with \(readKnowledgeBaseArticleToolName) before answering.",
             inputSchema: [
                 "type": "object",
                 "properties": [
                     "q": ["type": "string", "description": "What the user wants to know, as a few keywords, e.g. \"TSA secure flight activation\" or \"crew duty limits\"."],
                     "tenant": ["type": "string", "description": "Tenant slug whose articles to search. Omit for ForIT's own knowledge base (\(defaultKnowledgeBaseTenantSlug)), which holds the FL3XX articles; give a client's slug only when the user asks about that client's own procedures."],
+                    "category": ["type": "string", "description": "Knowledge base category to search within, e.g. \"FL3XX\" for any FL3XX question. Omit to search every category."],
                     "limit": ["type": "integer", "description": "Results, 1 to \(maximumKnowledgeBaseSearchResults). Default \(defaultKnowledgeBaseSearchResults)."],
                 ],
                 "required": ["q"],
@@ -176,7 +186,7 @@ enum WingmanToolCatalog {
         ),
         WingmanToolDescriptor(
             name: readKnowledgeBaseArticleToolName,
-            description: "Read one knowledge base article in full, by the article_id from \(searchKnowledgeBaseToolName). Answer from the article's steps in your own words and name the article so the user can open it.",
+            description: "Read one knowledge base article in full, by the article_id from \(searchKnowledgeBaseToolName). Answer from the article's steps in your own words, name the article, and end the written answer with a Source line carrying the article's url so the user can open it.",
             inputSchema: [
                 "type": "object",
                 "properties": [
@@ -397,6 +407,12 @@ enum WingmanToolCatalog {
         }
         let requestedLimit = integerValue(modelArguments["limit"]) ?? defaultKnowledgeBaseSearchResults
         gatewayArguments["limit"] = min(max(requestedLimit, 1), maximumKnowledgeBaseSearchResults)
+        // The category narrows the search to one product's articles ("FL3XX"), as the design
+        // record in for-FL3XX asks. It is forwarded as given; the gateway drops it until
+        // for-Support's ranked search declares the filter, and nothing here depends on it.
+        if let requestedCategory = nonEmptyString(modelArguments["category"]) {
+            gatewayArguments["category"] = requestedCategory
+        }
         return gatewayArguments
     }
 
@@ -707,6 +723,21 @@ enum WingmanToolCatalog {
             }
         }
         return jsonText(fromResultObject: condensedResult)
+    }
+
+    /// The citation of a read article, from the gateway result of `support_getKbArticle`: nil when
+    /// the result is not an article, has no title, or its url is not a web address.
+    static func knowledgeBaseArticleCitation(fromResultText resultText: String) -> WingmanKnowledgeBaseArticleCitation? {
+        guard let resultObject = jsonObject(fromResultText: resultText),
+              let article = resultObject["article"] as? [String: Any],
+              let title = nonEmptyString(article["title"]),
+              let urlText = nonEmptyString(article["url"]),
+              let url = URL(string: urlText),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            return nil
+        }
+        return WingmanKnowledgeBaseArticleCitation(title: title, url: url)
     }
 
     private static func condenseKnowledgeBaseArticleResult(_ resultText: String) -> String? {

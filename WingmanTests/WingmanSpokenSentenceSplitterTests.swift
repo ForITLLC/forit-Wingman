@@ -66,6 +66,29 @@ struct WingmanSpokenSentenceSplitterTests {
         #expect(splitter.flushRemaining(inAccumulatedText: "Done. And one more thing") == nil)
     }
 
+    @Test func theSourceLineIsShownButNeverSpoken() {
+        var splitter = WingmanSpokenSentenceSplitter()
+        let answerSoFar = "Open Settings, then Integrations, and switch TSA Secure Flight on. Save and the status turns green."
+        #expect(splitter.sentencesReady(inAccumulatedText: answerSoFar + "\nSour") == ["Open Settings, then Integrations, and switch TSA Secure Flight on."])
+        let wholeAnswer = answerSoFar + "\nSource: How to activate TSA Secure Flight — https://support.forit.io/forit/kb/how-to-activate-tsa-screening [POINT:none]"
+        #expect(splitter.sentencesReady(inAccumulatedText: wholeAnswer) == [])
+        #expect(splitter.flushRemaining(inAccumulatedText: wholeAnswer) == "Save and the status turns green.")
+    }
+
+    @Test func aSourceLineWithLeadingSpacesOrDifferentCaseIsStillNotSpoken() {
+        #expect(WingmanSpokenSentenceSplitter.speakablePortion(of: "Done.\n  source: Title — https://x.io/a") == "Done.\n")
+        #expect(WingmanSpokenSentenceSplitter.speakablePortion(of: "Source: Title — https://x.io/a") == "")
+        #expect(WingmanSpokenSentenceSplitter.speakablePortion(of: "Open the Sources tab.") == "Open the Sources tab.")
+    }
+
+    @Test func webAddressesAreLeftOutOfWhatIsSpoken() {
+        #expect(WingmanSpokenSentenceSplitter.speakableText(ofSentence: "The steps are at https://support.forit.io/forit/kb/tsa, under Integrations.") == "The steps are at, under Integrations.")
+        #expect(WingmanSpokenSentenceSplitter.speakableText(ofSentence: "See https://support.forit.io/forit/kb/tsa") == "See")
+        #expect(WingmanSpokenSentenceSplitter.speakableText(ofSentence: "https://support.forit.io/forit/kb/tsa") == nil)
+        #expect(WingmanSpokenSentenceSplitter.speakableText(ofSentence: "Source: How to activate TSA — https://x.io") == nil)
+        #expect(WingmanSpokenSentenceSplitter.speakableText(ofSentence: "  Click Save.  ") == "Click Save.")
+    }
+
     @Test func speakablePortionKeepsOrdinaryText() {
         #expect(WingmanSpokenSentenceSplitter.speakablePortion(of: "Hello there") == "Hello there")
         #expect(WingmanSpokenSentenceSplitter.speakablePortion(of: "Hello [POINT:1,2:x:screen1]") == "Hello ")

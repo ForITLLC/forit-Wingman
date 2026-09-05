@@ -131,6 +131,13 @@ enum WingmanAnalytics {
         recordProblem("tool_failed", properties: ["tool": toolName, "outcome": outcome])
     }
 
+    /// The answer is being read from a knowledge base article; `url` is the ForIT Support page the
+    /// answer cites (decision 012). Public, so `log show` can prove which article was cited: the
+    /// page address is a support link, never user content.
+    static func trackKnowledgeBaseArticleCited(url: String) {
+        recordMilestone("kb_article_cited", properties: ["url": url])
+    }
+
     // MARK: - Usage sharing
 
     /// One turn's usage report reached the relay; `stored` is what the relay said it did with it.

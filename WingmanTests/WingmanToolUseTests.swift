@@ -154,6 +154,43 @@ struct WingmanToolUseTests {
         }
     }
 
+    @Test func knowledgeBaseSearchForwardsTheCategoryOnlyWhenTheModelGaveOne() throws {
+        let categoryCall = try WingmanToolCatalog.prepareCall(
+            toolName: "support_searchKbArticles",
+            modelArguments: ["q": "TSA screening", "category": " FL3XX "],
+            signedInAccount: signedInAccount
+        )
+        #expect(categoryCall.arguments["category"] as? String == "FL3XX")
+        #expect(categoryCall.arguments.count == 4)
+
+        let blankCategoryCall = try WingmanToolCatalog.prepareCall(
+            toolName: "support_searchKbArticles",
+            modelArguments: ["q": "TSA screening", "category": "  "],
+            signedInAccount: signedInAccount
+        )
+        #expect(blankCategoryCall.arguments["category"] == nil)
+    }
+
+    @Test func aReadArticleYieldsTheCitationTheAnswerAndThePanelShow() throws {
+        let articleText = """
+        {"article":{"article_id":"7C1E","title":"How to activate TSA Secure Flight","url":"https://support.forit.io/forit/kb/how-to-activate-tsa-screening","content_plain":"Open Settings."}}
+        """
+        let citation = try #require(WingmanToolCatalog.knowledgeBaseArticleCitation(fromResultText: articleText))
+        #expect(citation.title == "How to activate TSA Secure Flight")
+        #expect(citation.url.absoluteString == "https://support.forit.io/forit/kb/how-to-activate-tsa-screening")
+
+        // An internal article carries its admin page, which is still a web address to open.
+        let adminArticleText = """
+        {"article":{"title":"Internal runbook","url":"https://support.forit.io/admin/kb/7C1E"}}
+        """
+        #expect(WingmanToolCatalog.knowledgeBaseArticleCitation(fromResultText: adminArticleText)?.url.host == "support.forit.io")
+
+        // No title, no web address, or not an article: nothing to cite.
+        #expect(WingmanToolCatalog.knowledgeBaseArticleCitation(fromResultText: "{\"article\":{\"url\":\"https://support.forit.io/x\"}}") == nil)
+        #expect(WingmanToolCatalog.knowledgeBaseArticleCitation(fromResultText: "{\"article\":{\"title\":\"T\",\"url\":\"javascript:alert(1)\"}}") == nil)
+        #expect(WingmanToolCatalog.knowledgeBaseArticleCitation(fromResultText: "{\"error\":\"Article not found\"}") == nil)
+    }
+
     @Test func readingAnArticleNeedsItsIdAndForwardsNothingElse() throws {
         let preparedCall = try WingmanToolCatalog.prepareCall(
             toolName: "support_getKbArticle",

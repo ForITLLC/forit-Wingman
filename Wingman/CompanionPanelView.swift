@@ -65,6 +65,11 @@ struct CompanionPanelView: View {
                 modelPickerRow
                     .padding(.horizontal, 16)
 
+                if let citedArticle = companionManager.lastCitedKnowledgeBaseArticle {
+                    citedArticleRow(citedArticle)
+                        .padding(.horizontal, 16)
+                }
+
                 if usageSharingPreference.hasAcknowledgedNotice {
                     usageSharingToggleRow
                         .padding(.horizontal, 16)
@@ -830,6 +835,47 @@ struct CompanionPanelView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    // MARK: - Cited article
+
+    /// The ForIT Support article the last answer was read from, with a button that opens it in
+    /// the browser. The answer bubble in the overlay is click-through, so this row is where the
+    /// citation can actually be clicked (decision 012).
+    private func citedArticleRow(_ citedArticle: WingmanKnowledgeBaseArticleCitation) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Source")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+
+                Text(citedArticle.title)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            Spacer()
+
+            Button(action: {
+                companionManager.openLastCitedKnowledgeBaseArticle()
+            }) {
+                Text("Open")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textOnAccent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(DS.Colors.accent)
+                    )
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help(citedArticle.url.absoluteString)
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Vocabulary
