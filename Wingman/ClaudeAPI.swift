@@ -50,7 +50,6 @@ class ClaudeAPI {
     private static var hasStartedTLSWarmup = false
 
     private let relayChatURL: URL
-    var model: String
     private let bearerTokenProvider: WingmanBearerTokenProvider
     private let session: URLSession
 
@@ -58,9 +57,8 @@ class ClaudeAPI {
     private var lastRelayWarmUpDate: Date?
     private static let relayWarmUpMinimumInterval: TimeInterval = 60
 
-    init(relayChatURL: URL, model: String, bearerTokenProvider: @escaping WingmanBearerTokenProvider) {
+    init(relayChatURL: URL, bearerTokenProvider: @escaping WingmanBearerTokenProvider) {
         self.relayChatURL = relayChatURL
-        self.model = model
         self.bearerTokenProvider = bearerTokenProvider
 
         // Use .default instead of .ephemeral so TLS session tickets are cached.
@@ -283,8 +281,10 @@ class ClaudeAPI {
     ) async throws -> ClaudeStreamedTurn {
         var request = try await makeAuthorizedRequest()
 
+        // No model is named: the relay answers with its WINGMAN_DEFAULT_MODEL setting, so ForIT
+        // changes the model for every Mac in one place (decision 018). The relay says which model
+        // it used in the x-wingman-model response header, read below for the usage report.
         var body: [String: Any] = [
-            "model": model,
             "max_tokens": maxTokens,
             "stream": true,
             "system": systemPrompt,
@@ -300,7 +300,7 @@ class ClaudeAPI {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         request.httpBody = bodyData
         let payloadMB = Double(bodyData.count) / 1_048_576.0
-        print("🌐 Relay chat request: \(String(format: "%.1f", payloadMB))MB, \(messages.count) message(s), \(tools.count) tool(s), model \(model)")
+        print("🌐 Relay chat request: \(String(format: "%.1f", payloadMB))MB, \(messages.count) message(s), \(tools.count) tool(s)")
 
         // Use bytes streaming for SSE (Server-Sent Events)
         let (byteStream, response) = try await session.bytes(for: request)
@@ -322,6 +322,8 @@ class ClaudeAPI {
             throw WingmanRelayError.relayRejected(statusCode: httpResponse.statusCode, message: errorMessage)
         }
 
+        let modelUsedByRelay = httpResponse.value(forHTTPHeaderField: "x-wingman-model")
+
         var streamParser = ClaudeSSEStreamParser()
         for try await line in byteStream.lines {
             if let accumulatedText = streamParser.consume(line: line) {
@@ -332,7 +334,7 @@ class ClaudeAPI {
             }
         }
 
-        return streamParser.finishedTurn()
+        return streamParser.finishedTurn(modelUsed: modelUsedByRelay)
     }
 }
 
@@ -355,6 +357,8 @@ struct ClaudeStreamedTurn {
     /// The assistant turn exactly as it must be echoed back into `messages` before tool results:
     /// text blocks and tool_use blocks in stream order.
     let assistantContentBlocks: [[String: Any]]
+    /// The model the relay answered with (its `x-wingman-model` header); nil when it sent none.
+    let modelUsed: String?
 
     var wantsToolCalls: Bool {
         stopReason == "tool_use" && !toolUses.isEmpty
@@ -469,7 +473,7 @@ struct ClaudeSSEStreamParser {
         orderedBlocks.filter { $0.type == "text" }.map { $0.text }.joined()
     }
 
-    func finishedTurn() -> ClaudeStreamedTurn {
+    func finishedTurn(modelUsed: String? = nil) -> ClaudeStreamedTurn {
         var toolUses: [ClaudeToolUseRequest] = []
         var assistantContentBlocks: [[String: Any]] = []
 
@@ -497,7 +501,8 @@ struct ClaudeSSEStreamParser {
             text: accumulatedText,
             toolUses: toolUses,
             stopReason: stopReason,
-            assistantContentBlocks: assistantContentBlocks
+            assistantContentBlocks: assistantContentBlocks,
+            modelUsed: modelUsed
         )
     }
 }
