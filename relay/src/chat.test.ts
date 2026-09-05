@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildAnthropicRequest, ChatRequestError, resolveModel } from "./chat.js";
+import { buildAnthropicRequest, ChatRequestError, resolveModel, withPromptCacheBreakpoint } from "./chat.js";
 import { loadRelayConfig } from "./config.js";
 
 const modelConfig = { allowedModels: ["claude-sonnet-5", "claude-opus-5"], defaultModel: "claude-sonnet-5" };
@@ -30,7 +30,11 @@ test("a text plus screenshot request is forwarded with stream on and max_tokens 
     modelConfig,
   );
   assert.equal(anthropicRequest.model, "claude-sonnet-5");
-  assert.equal(anthropicRequest.system, "You are Wingman.");
+  assert.deepEqual(anthropicRequest.system, [{ type: "text", text: "You are Wingman.", cache_control: { type: "ephemeral" } }]);
+  const screenshotMessageContent = anthropicRequest.messages[0].content;
+  assert.ok(Array.isArray(screenshotMessageContent));
+  assert.deepEqual(screenshotMessageContent[0], { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } });
+  assert.deepEqual(screenshotMessageContent[1], { type: "text", text: "What is on my screen?", cache_control: { type: "ephemeral" } });
   assert.equal(anthropicRequest.max_tokens, 4096);
   assert.equal(anthropicRequest.stream, true);
 });
@@ -199,4 +203,26 @@ test("tool_choice none is accepted so the app can force a spoken answer after th
     modelConfig,
   );
   assert.deepEqual(anthropicRequest.tool_choice, { type: "none" });
+});
+
+test("the cache breakpoint lands on the last block of the last user turn and never mutates the caller's messages", () => {
+  const toolResultTurn: Parameters<typeof withPromptCacheBreakpoint>[0][number] = {
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: "toolu_01", content: '{"tickets":[]}' }],
+  };
+  const original = [{ role: "user" as const, content: "what is open?" }, { role: "assistant" as const, content: "let me look." }, toolResultTurn];
+  const marked = withPromptCacheBreakpoint(original);
+  assert.deepEqual(marked[0], { role: "user", content: "what is open?" });
+  assert.deepEqual(marked[1], { role: "assistant", content: "let me look." });
+  assert.deepEqual(marked[2], {
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: "toolu_01", content: '{"tickets":[]}', cache_control: { type: "ephemeral" } }],
+  });
+  assert.deepEqual(toolResultTurn.content, [{ type: "tool_result", tool_use_id: "toolu_01", content: '{"tickets":[]}' }]);
+
+  const plainString = withPromptCacheBreakpoint([{ role: "user", content: "hi" }]);
+  assert.deepEqual(plainString[0], { role: "user", content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }] });
+
+  const emptyText = withPromptCacheBreakpoint([{ role: "user", content: [{ type: "text", text: "   " }] }]);
+  assert.deepEqual(emptyText[0], { role: "user", content: [{ type: "text", text: "   " }] });
 });

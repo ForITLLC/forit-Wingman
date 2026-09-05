@@ -54,6 +54,10 @@ class ClaudeAPI {
     private let bearerTokenProvider: WingmanBearerTokenProvider
     private let session: URLSession
 
+    /// When `warmUpRelay` last fired, so a key held twice in a minute costs one request.
+    private var lastRelayWarmUpDate: Date?
+    private static let relayWarmUpMinimumInterval: TimeInterval = 60
+
     init(relayChatURL: URL, model: String, bearerTokenProvider: @escaping WingmanBearerTokenProvider) {
         self.relayChatURL = relayChatURL
         self.model = model
@@ -136,6 +140,34 @@ class ClaudeAPI {
         warmupRequest.timeoutInterval = 10
         session.dataTask(with: warmupRequest) { _, _, _ in
             // Response doesn't matter — the TLS handshake is the goal
+        }.resume()
+    }
+
+    /// Wakes the relay while the user is still speaking. The relay runs on a consumption plan whose
+    /// worker goes cold between calls; a GET /api/health (no auth, no body) brings it up so the
+    /// chat call after the key release does not pay the cold start. Fire-and-forget, at most once
+    /// a minute, failures ignored.
+    func warmUpRelay() {
+        if let lastRelayWarmUpDate, Date().timeIntervalSince(lastRelayWarmUpDate) < Self.relayWarmUpMinimumInterval {
+            return
+        }
+        lastRelayWarmUpDate = Date()
+
+        guard var healthURLComponents = URLComponents(url: relayChatURL, resolvingAgainstBaseURL: false) else {
+            return
+        }
+        healthURLComponents.path = "/api/health"
+        healthURLComponents.query = nil
+        healthURLComponents.fragment = nil
+        guard let healthURL = healthURLComponents.url else {
+            return
+        }
+
+        var warmUpRequest = URLRequest(url: healthURL)
+        warmUpRequest.httpMethod = "GET"
+        warmUpRequest.timeoutInterval = 15
+        session.dataTask(with: warmUpRequest) { _, _, _ in
+            // The response does not matter; a running worker is the goal.
         }.resume()
     }
 

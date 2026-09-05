@@ -5,7 +5,9 @@
 //  Local analytics wrapper. Upstream sent these events to a hosted analytics SDK;
 //  Wingman sends nothing off the machine. The event names are kept so the
 //  call sites stay stable and so a ForIT-owned sink can be wired in later
-//  without touching the pipeline code. Everything here is a debug log line.
+//  without touching the pipeline code. Ordinary events are debug log lines (not persisted by
+//  the unified log); failures are error-level lines with public fields so they can be read
+//  back with `log show --predicate 'subsystem == "io.forit.wingman"'` after the fact.
 //
 
 import Foundation
@@ -18,6 +20,14 @@ enum WingmanAnalytics {
     private static func record(_ eventName: String, properties: [String: String] = [:]) {
         let propertySummary = properties.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
         logger.debug("event=\(eventName, privacy: .public) \(propertySummary, privacy: .private)")
+    }
+
+    /// Failures are logged at error level with public fields: debug lines are dropped by the
+    /// unified log and private fields render as <private>, which made "see the error" unanswerable
+    /// after the fact. Callers pass stable labels or error descriptions, never user content.
+    private static func recordProblem(_ eventName: String, properties: [String: String] = [:]) {
+        let propertySummary = properties.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+        logger.error("event=\(eventName, privacy: .public) \(propertySummary, privacy: .public)")
     }
 
     // MARK: - Setup
@@ -106,12 +116,12 @@ enum WingmanAnalytics {
 
     /// The app refused a tool call before the gateway (not on the allow-list, bad arguments).
     static func trackToolRefused(toolName: String, reason: String) {
-        record("tool_refused", properties: ["tool": toolName, "reason": reason])
+        recordProblem("tool_refused", properties: ["tool": toolName, "reason": reason])
     }
 
     /// The gateway refused or failed a tool call; `outcome` is a stable label, never the payload.
     static func trackToolFailed(toolName: String, outcome: String) {
-        record("tool_failed", properties: ["tool": toolName, "outcome": outcome])
+        recordProblem("tool_failed", properties: ["tool": toolName, "outcome": outcome])
     }
 
     // MARK: - Sign-in
@@ -125,11 +135,11 @@ enum WingmanAnalytics {
 
     /// An error occurred during the model response pipeline.
     static func trackResponseError(error: String) {
-        record("response_error", properties: ["error": error])
+        recordProblem("response_error", properties: ["error": error])
     }
 
     /// An error occurred during TTS playback.
     static func trackTTSError(error: String) {
-        record("tts_error", properties: ["error": error])
+        recordProblem("tts_error", properties: ["error": error])
     }
 }

@@ -231,3 +231,49 @@ Option 3.
   `title` and `url`; it cannot quote a draft because the search route returns published articles only.
 - The `tools/list` narrowing applies to every catalog tool, so a gateway that withdraws a tool stops it being
   offered rather than producing "that failed" answers.
+
+## 004 — Voice turns speak while the model is still writing; the relay keeps its prompt cache and its worker warm
+
+Date: 2026-09-05. Status: accepted.
+
+### Context
+
+Ben, on a measured turn (2026-09-05, 19:21 PDT): relay call 2.3 s, two model rounds of 5.5 s and about 7 s,
+TTS 2.0 s, then 28 s of playback. "Any thoughts on the speed" and "can you make it faster?". Nothing was
+spoken until the last token had arrived and the whole reply's audio had been fetched, so the user waited
+for the sum of every stage before hearing the first word. The relay runs on a consumption plan whose worker
+goes cold between calls, and every call re-sent the full system prompt and screenshot to Anthropic with no
+cache marker.
+
+### Decision
+
+- **Speak sentence by sentence.** The app cuts the streamed reply at sentence boundaries
+  (`WingmanSpokenSentenceSplitter`: the first sentence as soon as it ends, later ones once about 60
+  characters are pending, never anything from `[POINT` onward), queues each sentence for TTS
+  (`ElevenLabsTTSClient.enqueueSentence`, two fetches ahead, played in order) and the turn ends when the
+  queue drains (`finishEnqueuedSpeech`). A tool round's preamble ("Let me check the tickets.") is spoken
+  too, so a tool call is no longer a silent spinner. The transcript, history and pointing tag handling are
+  unchanged: the full text is still parsed once the stream ends.
+- **Use the key-down.** While the user holds the push-to-talk key the app wakes the relay
+  (`GET /api/health`, unauthenticated, at most once a minute) and refreshes the gateway `tools/list` in the
+  background if the 15-minute cache is stale; the turn joins that refresh instead of starting its own.
+- **Relay: prompt caching and a keep-warm timer.** `/api/chat` sends the system prompt as a text block with
+  `cache_control: ephemeral` and marks the last block of the last user message the same way, so Anthropic
+  reuses the prefix within a conversation; a timer function runs every four minutes so the Function App's
+  worker is rarely cold. The relay still stores nothing (001 stands): the cache lives at Anthropic, keyed
+  by prompt content, for minutes.
+- **Errors become readable.** `tool_refused`, `tool_failed`, `response_error` and `tts_error` are logged at
+  error level with public fields so they survive in the unified log; ordinary events stay debug. Nothing
+  logged carries user content: labels, tool names and error descriptions only.
+
+### Consequences
+
+- The first spoken word arrives after the first sentence plus one TTS fetch (about 2 to 4 s after the model
+  starts) instead of after the whole reply. Model rounds and tool calls are not shorter; they are overlapped
+  with speech.
+- The relay makes more, smaller TTS calls per reply (one per sentence or clause). ElevenLabs bills per
+  character, so the cost per reply is unchanged; only request count rises.
+- The keep-warm timer costs a few hundred trivial executions a day on the consumption plan.
+- A reply that fails mid-way is now partly spoken before the fallback message. The queue is dropped on the
+  first error so nothing stale plays after it.
+- Measurement after install is by the Mac's unified log (relay and TTS request timings) and by ear.
