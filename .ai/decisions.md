@@ -313,3 +313,33 @@ before. The hardened runtime stays off (library validation wants a Team ID, see 
   permission on every Mac, not a broken app.
 - Replace with a ForIT Developer ID when one exists; the same workflow step takes that PKCS#12 and the
   hardened runtime can then go back on.
+
+## 006 — Taught vocabulary is applied on the Mac, in the app, not in the relay or the model
+
+### Context
+
+Ben, 2026-09-05: "fl3xx is Flex, how can we train on that?" and "we'll make this so it could be any
+vocabulary that we could teach". Apple Speech hears "Flex" for FL3XX, the model then searches the
+knowledge base for the wrong word, and ElevenLabs spells F-L-3-X-X back. Every product ForIT supports
+has a name like this, and the list differs per person.
+
+### Decision
+
+A vocabulary of terms (canonical spelling, spoken forms, one-line meaning) lives in a JSON file in
+Application Support on each Mac, seeded with FL3XX, and is edited in the panel. It is applied by the
+app at four points: the terms are Apple Speech contextual keyterms; the final transcript is rewritten
+from spoken form to canonical spelling before the model sees it; the system prompt carries a vocabulary
+section; and each sentence sent to text-to-speech is rewritten from canonical spelling to the first
+spoken form. The tool policy also refuses a vocabulary term as a knowledge base tenant. Nothing about
+the vocabulary is sent anywhere except as words inside the prompt and transcript that already go to the
+relay.
+
+### Consequences
+
+- Rewrites are whole-word and case-insensitive, longest spoken form first, so "Flex" inside
+  "flexible" is untouched and a two-word form is not eaten by its first word.
+- The on-screen reply keeps the canonical spelling; only the spoken audio is rewritten.
+- The vocabulary is per Mac. A shared, tenant-level vocabulary would be a for-Support or for-mcp
+  concern and is not designed here.
+- Adding a term changes the system prompt, which invalidates the relay's Anthropic prompt cache once
+  per change; the prompt is otherwise stable.

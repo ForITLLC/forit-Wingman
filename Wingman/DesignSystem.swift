@@ -58,10 +58,9 @@ enum DS {
         /// Tertiary text — very muted, used for section labels, timestamps, disabled text.
         static let textTertiary = Color(hex: "#6B736F")
 
-        /// Text used on top of the accent fill (#2563eb blue), like the primary button label.
-        /// White on #2563eb achieves ~5.1:1 contrast — WCAG AA compliant.
-        /// White on #1d4ed8 hover achieves ~6.5:1 — also WCAG AA compliant.
-        static let textOnAccent: Color = .white
+        /// Text used on top of the accent fill (the ForIT cyan), like the primary button label.
+        /// ForIT navy #142F43 on cyan #8EDCEF is about 9:1 contrast — WCAG AAA.
+        static let textOnAccent: Color = foritNavy
 
         // ── Tailwind Blue Scale ─────────────────────────────────────
         // Full Tailwind CSS v4 blue palette for consistent blue usage.
@@ -88,24 +87,33 @@ enum DS {
         static let blue900 = Color(hex: "#1e3a8a")
         static let blue950 = Color(hex: "#172554")
 
-        // ── Accent (derived from blue scale) ───────────────────────
-        // The primary fill is Blue 600; hover darkens to Blue 700.
+        // ── ForIT brand ─────────────────────────────────────────────
+        // The forit.io palette: navy, cyan, light grey and dark blue. Ben, 2026-09-05: "make the
+        // blue for Wingman one of the ForIT colors", so the cursor and the accent are the brand
+        // cyan and text on the accent is the brand navy. The Tailwind scale above is upstream's
+        // and is no longer used for the accent.
+        static let foritNavy = Color(hex: "#142F43")
+        static let foritCyan = Color(hex: "#8EDCEF")
+        /// The cyan darkened a step for hover and pressed states.
+        static let foritCyanPressed = Color(hex: "#6FCBE3")
+        static let foritLightGrey = Color(hex: "#E1EFF3")
+        static let foritDarkBlue = Color(hex: "#0A1A26")
 
-        /// Accent fill — used for solid button backgrounds.
-        /// #2563eb → ~5.1:1 contrast with white text (WCAG AA).
-        static let accent = blue600
+        // ── Accent (ForIT cyan) ─────────────────────────────────────
 
-        /// Accent hover — slightly darker blue for hover state.
-        /// #1d4ed8 → ~6.5:1 contrast with white text (WCAG AA+).
-        static let accentHover = blue700
+        /// Accent fill — used for solid button backgrounds, with `textOnAccent` (navy) on top.
+        static let accent = foritCyan
 
-        /// Accent text — bright blue used for accent-colored text and icons
-        /// on dark backgrounds (links, active nav items, highlighted labels).
-        static let accentText = blue400
+        /// Accent hover — the cyan a step darker for hover state.
+        static let accentHover = foritCyanPressed
 
-        /// Very subtle accent tint — used for selected item backgrounds (e.g. current step
-        /// in the sidebar). Low opacity so it doesn't overpower.
-        static let accentSubtle = blue500.opacity(0.10)
+        /// Accent text — the cyan used for accent-colored text and icons on dark backgrounds
+        /// (links, active nav items, the listening / thinking status dot).
+        static let accentText = foritCyan
+
+        /// Very subtle accent tint — used for selected item backgrounds. Low opacity so it
+        /// doesn't overpower.
+        static let accentSubtle = foritCyan.opacity(0.12)
 
         // ── Semantic Colors ──────────────────────────────────────────
 
@@ -138,10 +146,10 @@ enum DS {
 
         // ── Overlay Cursor ───────────────────────────────────────────
 
-        /// The blue cursor/bubble color used in OverlayWindow.
-        /// Kept distinct from the accent since it serves a different purpose
-        /// (screen overlay vs in-app UI).
-        static let overlayCursorBlue = Color(hex: "#3380FF")
+        /// The cursor/bubble color used in OverlayWindow: the ForIT cyan, the same as the accent.
+        /// Its own token because the overlay serves a different purpose (screen overlay vs
+        /// in-app UI) and may drift from the accent again.
+        static let overlayCursorColor = foritCyan
 
         // ── Floating Button Gradient ─────────────────────────────────
 

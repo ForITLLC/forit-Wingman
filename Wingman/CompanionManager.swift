@@ -67,6 +67,10 @@ final class CompanionManager: ObservableObject {
     /// account nothing is captured or sent (push-to-talk is refused in handleShortcutTransition).
     let signInManager = WingmanEntraSignInManager()
 
+    /// The terms the user has taught Wingman (FL3XX said as "Flex", and whatever they add in the
+    /// panel). Applied on this Mac to speech recognition, the transcript, the prompt and the voice.
+    let vocabularyStore = WingmanVocabularyStore()
+
     private lazy var claudeAPI: ClaudeAPI = {
         return ClaudeAPI(
             relayChatURL: WingmanServiceConfiguration.relayChatURL,
@@ -127,6 +131,7 @@ final class CompanionManager: ObservableObject {
     private var shortcutTransitionCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
+    private var vocabularyCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     /// Scheduled hide for transient cursor mode — cancelled if the user
@@ -191,6 +196,7 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
+        bindVocabularyToSpeechRecognition()
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
@@ -492,10 +498,14 @@ final class CompanionManager: ObservableObject {
                         // Partial transcripts are hidden (waveform-only UI)
                     },
                     submitDraftText: { [weak self] finalTranscript in
-                        self?.lastTranscript = finalTranscript
-                        print("🗣️ Companion received transcript: \(finalTranscript)")
-                        WingmanAnalytics.trackUserMessageSent(transcript: finalTranscript)
-                        self?.sendTranscriptToClaudeWithScreenshot(transcript: finalTranscript)
+                        guard let self else { return }
+                        // Spoken forms become the canonical spelling ("Flex" -> "FL3XX") before the
+                        // model, the knowledge base or a tool sees the words.
+                        let canonicalTranscript = self.vocabularyStore.vocabulary.canonicalisingSpokenForms(in: finalTranscript)
+                        self.lastTranscript = canonicalTranscript
+                        print("🗣️ Companion received transcript: \(canonicalTranscript)")
+                        WingmanAnalytics.trackUserMessageSent(transcript: canonicalTranscript)
+                        self.sendTranscriptToClaudeWithScreenshot(transcript: canonicalTranscript)
                     }
                 )
             }
@@ -511,6 +521,23 @@ final class CompanionManager: ObservableObject {
         case .none:
             break
         }
+    }
+
+    // MARK: - Vocabulary
+
+    /// Keeps Apple Speech's contextual keyterms in step with the taught vocabulary, so a term the
+    /// user adds in the panel is favoured by the recogniser on the very next push-to-talk.
+    private func bindVocabularyToSpeechRecognition() {
+        vocabularyCancellable = vocabularyStore.$vocabulary
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] vocabulary in
+                self?.buddyDictationManager.updateContextualKeyterms(vocabulary.transcriptionKeyterms())
+            }
+    }
+
+    /// The system prompt for this turn: the fixed companion prompt plus the taught vocabulary.
+    private var voiceSystemPromptForThisTurn: String {
+        Self.companionVoiceResponseSystemPrompt + vocabularyStore.vocabulary.systemPromptSection()
     }
 
     // MARK: - Companion Prompt
@@ -543,7 +570,7 @@ final class CompanionManager: ObservableObject {
     when summarising a ticket say who raised it, what it is about, its status and what is blocking it, in a sentence or two. for a list give the count and the two or three that matter most (breached or nearest sla, highest priority), not every ticket. say ticket numbers as digits, like "ticket two twenty seven". a tool error means you say what failed; never invent the answer.
 
     element pointing:
-    you have a small blue triangle cursor that can fly to and point at things on screen. use it whenever pointing would genuinely help the user — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app, point at the relevant element. err on the side of pointing rather than not pointing, because it makes your help way more useful and concrete.
+    you have a small light-blue triangle cursor that can fly to and point at things on screen. use it whenever pointing would genuinely help the user — if they're asking how to do something, looking for a menu, trying to find a button, or need help navigating an app, point at the relevant element. err on the side of pointing rather than not pointing, because it makes your help way more useful and concrete.
 
     don't point at things when it would be pointless — like if the user asks a general knowledge question, or the conversation has nothing to do with what's on screen, or you'd just be pointing at something obvious they're already looking at. but if there's a specific UI element, menu, button, or area on screen that's relevant to what you're helping with, point at it.
 
@@ -752,7 +779,7 @@ final class CompanionManager: ObservableObject {
         for _ in 0..<Self.maximumToolRoundsPerTurn {
             spokenSentenceSplitter = WingmanSpokenSentenceSplitter()
             let streamedTurn = try await claudeAPI.streamTurn(
-                systemPrompt: Self.companionVoiceResponseSystemPrompt,
+                systemPrompt: voiceSystemPromptForThisTurn,
                 messages: messages,
                 tools: toolDefinitions,
                 toolChoice: ["type": "auto"],
@@ -797,7 +824,7 @@ final class CompanionManager: ObservableObject {
         // tool blocks, which the API only accepts alongside tool definitions) but none allowed.
         spokenSentenceSplitter = WingmanSpokenSentenceSplitter()
         let finalTurn = try await claudeAPI.streamTurn(
-            systemPrompt: Self.companionVoiceResponseSystemPrompt,
+            systemPrompt: voiceSystemPromptForThisTurn,
             messages: messages,
             tools: toolDefinitions,
             toolChoice: ["type": "none"],
@@ -811,16 +838,18 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Hands every sentence that is complete in the streamed reply so far to the speech queue.
+    /// The on-screen text keeps the canonical spelling; only what is spoken is rewritten so the
+    /// voice says "Flex" rather than spelling out F-L-3-X-X.
     private func enqueueSentencesReadyToSpeak(inAccumulatedText accumulatedText: String) {
         for readySentence in spokenSentenceSplitter.sentencesReady(inAccumulatedText: accumulatedText) {
-            elevenLabsTTSClient.enqueueSentence(readySentence)
+            elevenLabsTTSClient.enqueueSentence(vocabularyStore.vocabulary.pronouncingCanonicalSpellings(in: readySentence))
         }
     }
 
     /// Hands the tail of a finished reply (text after the last sentence boundary) to the queue.
     private func enqueueRemainingSpeech(inAccumulatedText accumulatedText: String) {
         if let remainingText = spokenSentenceSplitter.flushRemaining(inAccumulatedText: accumulatedText) {
-            elevenLabsTTSClient.enqueueSentence(remainingText)
+            elevenLabsTTSClient.enqueueSentence(vocabularyStore.vocabulary.pronouncingCanonicalSpellings(in: remainingText))
         }
     }
 
@@ -882,7 +911,8 @@ final class CompanionManager: ObservableObject {
             preparedCall = try WingmanToolCatalog.prepareCall(
                 toolName: toolUse.name,
                 modelArguments: toolUse.input,
-                signedInAccount: signInManager.signedInAccount
+                signedInAccount: signInManager.signedInAccount,
+                vocabulary: vocabularyStore.vocabulary
             )
         } catch let refusal as WingmanToolRefusal {
             WingmanAnalytics.trackToolRefused(toolName: toolUse.name, reason: refusal.modelFacingMessage)
@@ -899,7 +929,12 @@ final class CompanionManager: ObservableObject {
             let toolResult = try await gatewayToolClient.callTool(named: preparedCall.toolName, arguments: preparedCall.arguments)
             let condensedText = WingmanToolCatalog.condenseResult(toolName: preparedCall.toolName, resultText: toolResult.text)
             if toolResult.isError {
-                WingmanAnalytics.trackToolFailed(toolName: preparedCall.toolName, outcome: "tool_error")
+                // The label carries the HTTP status the gateway reported (tool_error_http_401), never
+                // the error body, so the Mac log says why a tool failed without holding any data.
+                WingmanAnalytics.trackToolFailed(
+                    toolName: preparedCall.toolName,
+                    outcome: WingmanGatewayToolClient.failureOutcomeLabel(forErrorResultText: toolResult.text)
+                )
             }
             return .result(text: condensedText, isError: toolResult.isError)
         } catch let gatewayError as WingmanGatewayToolError {

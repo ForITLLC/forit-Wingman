@@ -193,7 +193,8 @@ enum WingmanToolCatalog {
     static func prepareCall(
         toolName: String,
         modelArguments: [String: Any],
-        signedInAccount: WingmanSignedInAccount?
+        signedInAccount: WingmanSignedInAccount?,
+        vocabulary: WingmanVocabulary = WingmanVocabulary.builtIn
     ) throws -> WingmanPreparedToolCall {
         guard descriptor(named: toolName) != nil else {
             throw WingmanToolRefusal.notOnAllowList(toolName: toolName)
@@ -210,7 +211,7 @@ enum WingmanToolCatalog {
         case searchFlightsToolName:
             return WingmanPreparedToolCall(toolName: toolName, arguments: prepareSearchFlightsArguments(modelArguments))
         case searchKnowledgeBaseToolName:
-            return WingmanPreparedToolCall(toolName: toolName, arguments: try prepareSearchKnowledgeBaseArguments(modelArguments))
+            return WingmanPreparedToolCall(toolName: toolName, arguments: try prepareSearchKnowledgeBaseArguments(modelArguments, vocabulary: vocabulary))
         case readKnowledgeBaseArticleToolName:
             return WingmanPreparedToolCall(toolName: toolName, arguments: try prepareReadKnowledgeBaseArticleArguments(modelArguments))
         default:
@@ -294,12 +295,22 @@ enum WingmanToolCatalog {
         return gatewayArguments
     }
 
-    private static func prepareSearchKnowledgeBaseArguments(_ modelArguments: [String: Any]) throws -> [String: Any] {
+    private static func prepareSearchKnowledgeBaseArguments(
+        _ modelArguments: [String: Any],
+        vocabulary: WingmanVocabulary
+    ) throws -> [String: Any] {
         guard let searchText = nonEmptyString(modelArguments["q"]) else {
             throw WingmanToolRefusal.invalidArguments(toolName: searchKnowledgeBaseToolName, reason: "q (what to search for) is required.")
         }
         var gatewayArguments: [String: Any] = ["q": searchText]
-        gatewayArguments["tenant"] = nonEmptyString(modelArguments["tenant"])?.lowercased() ?? defaultKnowledgeBaseTenantSlug
+        // A product name is never a tenant: "search FL3XX for TSA" must not become tenant "fl3xx"
+        // (a 404 from for-Support). Any term the vocabulary knows falls back to the default tenant.
+        let requestedTenantSlug = nonEmptyString(modelArguments["tenant"])?.lowercased()
+        if let requestedTenantSlug, !vocabulary.containsTerm(matching: requestedTenantSlug) {
+            gatewayArguments["tenant"] = requestedTenantSlug
+        } else {
+            gatewayArguments["tenant"] = defaultKnowledgeBaseTenantSlug
+        }
         let requestedLimit = integerValue(modelArguments["limit"]) ?? defaultKnowledgeBaseSearchResults
         gatewayArguments["limit"] = min(max(requestedLimit, 1), maximumKnowledgeBaseSearchResults)
         return gatewayArguments
