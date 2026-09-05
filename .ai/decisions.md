@@ -430,6 +430,15 @@ allowed by MDM at all, so each person approves those once on first use.
 - Scope starts as Christine's laptop and grows to every ForIT Mac. Sign-in stays the person's ForIT Entra
   account with no group restriction, so nothing in the app changes per person.
 
+### Amendment, 2026-09-05 evening: the package must hand the bundle to the console user
+
+Installer leaves `/Applications/Wingman.app` owned by `root:wheel`. Sparkle installs an update as the signed-in
+person and will not silently replace a bundle they cannot write to, so after the first Jamf install Ben's Mac
+downloaded 0.1.53 twice and 0.1.55 once and installed none, idle or relaunched, while the drag-installed copy
+had updated within two minutes that morning. The postinstall now runs `chown -R <console user>:staff` on the
+bundle before launching it. The Macs that received the root-owned package (Ben's, Christine's) need the fixed
+package pushed once more; from then on Sparkle updates them within the hour as designed in decision 007.
+
 ## 009 — A FL3XX question the knowledge base cannot answer gets labelled general guidance, not a dead end
 
 ### Context

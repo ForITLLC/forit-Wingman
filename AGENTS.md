@@ -206,8 +206,12 @@ Do NOT update this file for minor edits, bug fixes, or changes that don't affect
 - Jamf (2026-09-05, Ben: "make this a Jamf package and push it to Christine's laptop", then "every employee would use this
   potentially, so for anyone with a Mac I want it installed"): every release also carries `Wingman-<version>.pkg` and
   `designated-requirement.txt`. The package is a `pkgbuild` component package that installs `Wingman.app` to `/Applications`, with `BundleIsRelocatable` pinned to false in its component plist because Installer otherwise puts the app onto any existing copy with the same bundle id (the first CI run landed it on the DerivedData copy the smoke test had launched; on a Mac it would be a stray copy in Downloads);
-  its postinstall (`packaging/pkg-scripts/postinstall`) quits a stale running copy and launches the new one for the person at
-  the console through LaunchServices, never as root. It is unsigned (no Developer ID Installer certificate yet), which a Jamf
+  its postinstall (`packaging/pkg-scripts/postinstall`) hands the bundle to the person at the console (`chown -R user:staff`),
+  quits a stale running copy and launches the new one for them through LaunchServices, never as root. The chown is what keeps
+  Sparkle working after a Jamf install: Installer leaves the bundle root-owned, the signed-in person cannot write into it, and a
+  silent update never asks for authorization, so a root-owned Wingman downloads every release and installs none (Ben's Mac,
+  2026-09-05, three downloads and no install between the first Jamf install and this fix; the drag-installed copy had updated
+  within two minutes that morning). A Mac that already got the root-owned package needs the fixed package pushed once more. It is unsigned (no Developer ID Installer certificate yet), which a Jamf
   policy accepts and an MDM install command does not. The job installs the package on the runner as root and checks the copy in
   `/Applications` before anything is released. The PPPC profile grants Accessibility by the code requirement in
   `designated-requirement.txt` (`identifier "io.forit.wingman" and certificate root = H"d7c3…"`) and lets standard users approve
