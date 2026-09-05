@@ -190,7 +190,7 @@ struct BlueCursorView: View {
             if isCursorOnThisScreen && showWelcome && !welcomeText.isEmpty {
                 Text(welcomeText)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(DS.Colors.textOnAccent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(
@@ -234,7 +234,7 @@ struct BlueCursorView: View {
             if isCursorOnThisScreen && companionManager.showOnboardingPrompt && !companionManager.onboardingPromptText.isEmpty {
                 Text(companionManager.onboardingPromptText)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(DS.Colors.textOnAccent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(
@@ -264,7 +264,7 @@ struct BlueCursorView: View {
             if buddyNavigationMode == .pointingAtTarget && !navigationBubbleText.isEmpty {
                 Text(navigationBubbleText)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white)
+                    .foregroundColor(DS.Colors.textOnAccent)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(
@@ -302,8 +302,18 @@ struct BlueCursorView: View {
             // During cursor following: fast spring animation for snappy tracking.
             // During navigation: NO implicit animation — the frame-by-frame bezier
             // timer controls position directly at 60fps for a smooth arc flight.
-            Triangle()
-                .fill(DS.Colors.overlayCursorColor)
+            // The pointer is built like the ForIT mark: a cyan face inside a line. The navy line
+            // gives it contrast on light screens; the white halo outside the line keeps it visible
+            // on dark ones. Strokes are centred on the edge, so the fill sits between the halo and
+            // the line in the ZStack.
+            ZStack {
+                Triangle()
+                    .stroke(DS.Colors.overlayCursorHaloColor, style: StrokeStyle(lineWidth: 4, lineJoin: .round))
+                Triangle()
+                    .fill(DS.Colors.overlayCursorColor)
+                Triangle()
+                    .stroke(DS.Colors.overlayCursorOutlineColor, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+            }
                 .frame(width: 16, height: 16)
                 .rotationEffect(.degrees(triangleRotationDegrees))
                 .shadow(color: DS.Colors.overlayCursorColor, radius: 8 + (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
