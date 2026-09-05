@@ -86,9 +86,21 @@ final class MenuBarPanelManager: NSObject {
         button.target = self
     }
 
+    /// The menu bar glyph is the ForIT hexagon with the Wingman pointer landing on
+    /// its lower-right corner (`Assets.xcassets/MenuBarIcon`, rendered from
+    /// `docs/brand/wingman-menu-bar-glyph.svg`). It is a template image, so macOS
+    /// tints it for a light or dark menu bar. If the asset is ever missing the
+    /// menu bar must not go blank, so the old drawn pointer is the fallback.
+    private func makeWingmanMenuBarIcon() -> NSImage {
+        if let brandGlyphFromAssetCatalog = NSImage(named: "MenuBarIcon") {
+            return brandGlyphFromAssetCatalog
+        }
+        return makeFallbackPointerMenuBarIcon()
+    }
+
     /// Draws the wingman triangle as a menu bar icon. Uses the same shape
     /// and rotation as the in-app cursor so the menu bar icon matches.
-    private func makeWingmanMenuBarIcon() -> NSImage {
+    private func makeFallbackPointerMenuBarIcon() -> NSImage {
         let iconSize: CGFloat = 18
         let image = NSImage(size: NSSize(width: iconSize, height: iconSize))
         image.lockFocus()
