@@ -721,6 +721,13 @@ final class CompanionManager: ObservableObject {
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                // The same interruption seen from URLSession: a new push-to-talk press cancelled
+                // this task while the relay stream was open, and URLSession reports that as
+                // URLError.cancelled rather than CancellationError. It is not a failed call, so
+                // it must stay silent. Before this clause it fell through to the generic catch
+                // and spoke "The Wingman service is not available" (Ben, 2026-09-05 21:59, after a
+                // second press 130 ms after releasing the first).
             } catch let relayError as WingmanRelayError where relayError.isNotAuthorized {
                 // The relay no longer accepts this sign-in: drop it locally and send the
                 // user back to the panel instead of retrying with the same token.
@@ -735,9 +742,13 @@ final class CompanionManager: ObservableObject {
                 speakSignInRequiredFallback()
                 NotificationCenter.default.post(name: .wingmanShowPanel, object: nil)
             } catch {
-                WingmanAnalytics.trackResponseError(error: error.localizedDescription)
-                print("⚠️ Companion response error: \(error)")
-                speakCreditsErrorFallback()
+                // Anything thrown after the task was cancelled is a consequence of the cancel,
+                // not of the service, so it is not reported or spoken either.
+                if !Task.isCancelled {
+                    WingmanAnalytics.trackResponseError(error: error.localizedDescription)
+                    print("⚠️ Companion response error: \(error)")
+                    speakCreditsErrorFallback()
+                }
             }
 
             if !Task.isCancelled {
