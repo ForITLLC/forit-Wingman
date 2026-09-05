@@ -211,6 +211,29 @@ struct WingmanToolUseTests {
 
     // MARK: - Result condensing
 
+    @Test func knowledgeBaseSearchSendsTheKeywordsOfASpokenQuestion() throws {
+        let spokenQuestion = try WingmanToolCatalog.prepareCall(
+            toolName: "support_searchKbArticles",
+            modelArguments: ["q": "How do I create a quote in FL3XX?"],
+            signedInAccount: signedInAccount
+        )
+        #expect(spokenQuestion.arguments["q"] as? String == "create quote")
+
+        let possessiveProductName = try WingmanToolCatalog.prepareCall(
+            toolName: "support_searchKbArticles",
+            modelArguments: ["q": "Flex's crew roster"],
+            signedInAccount: signedInAccount
+        )
+        #expect(possessiveProductName.arguments["q"] as? String == "crew roster")
+
+        let onlyFillerAndTheProductName = try WingmanToolCatalog.prepareCall(
+            toolName: "support_searchKbArticles",
+            modelArguments: ["q": " what is FL3XX? "],
+            signedInAccount: signedInAccount
+        )
+        #expect(onlyFillerAndTheProductName.arguments["q"] as? String == "what is FL3XX?")
+    }
+
     @Test func knowledgeBaseSearchResultsKeepTheCitationFieldsAndDropBodies() throws {
         let gatewayResultText = """
         {"articles":[{"article_id":"7C1E","title":"How to activate TSA Secure Flight","slug":"how-to-activate-tsa-screening","summary":"Activation guide.","ai_summary":null,"category_name":"FL3XX","tenant_slug":"forit","is_global":false,"updated_at":"2026-09-01T10:00:00Z","url":"https://support.forit.io/forit/kb/how-to-activate-tsa-screening","content":"<p>very long html</p>","content_plain":"very long text","author_id":"u1","view_count":12}],"tenant":"forit","total":1}

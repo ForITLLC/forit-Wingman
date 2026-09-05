@@ -209,3 +209,22 @@ present, and `url` passes through as before.
 - Keeps the citation fields from search results and cuts an article body at 12,000 characters.
 - Tests: `WingmanTests/WingmanToolUseTests.swift` (argument policy, condensing, `tools/list` parsing,
   catalog narrowing).
+
+## Ranking (proposed 2026-09-05, after the first day of Wingman use)
+
+Measured against the `forit` tenant with the Wingman search: "how do I add a crew member to a flight"
+returned 84 articles led by "Staff (crew member) — record detail", then the FL3XX Data Processing
+Agreement and a blog post on trip management software. Every one of those pages contains all seven words
+somewhere in its body, no title contains all seven, so the order falls back to `updated_at`. Wingman now
+sends keywords only, which helps, but the staff search would serve every caller better if it ranked by
+kind before date:
+
+1. articles whose **title** matches all terms, then
+2. `kb-*` and `appui-*` articles (the help-centre how-tos and the screen references) whose summary or body
+   matches, then
+3. `dev-*` (developer portal), then
+4. `web-*` (marketing, press, legal, blog) last, or excluded from the staff search unless a term matches
+   their title.
+
+No route or field changes; only the `ORDER BY` of `GET /api/admin/kb/search`. Wingman needs nothing new
+to benefit.
