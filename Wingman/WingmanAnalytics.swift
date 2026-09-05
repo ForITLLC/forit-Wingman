@@ -150,6 +150,18 @@ enum WingmanAnalytics {
         recordProblem("usage_report_failed", properties: ["error": error])
     }
 
+    // MARK: - Vocabulary
+
+    /// ForIT Support's vocabulary replaced the stored list; `termCount` is the size of that list.
+    static func trackVocabularyRefreshed(termCount: Int) {
+        recordMilestone("vocabulary_refreshed", properties: ["terms": String(termCount)])
+    }
+
+    /// The fetch failed and the stored list stays. `reason` is a stable label, never the response.
+    static func trackVocabularyRefreshFailed(reason: String) {
+        recordProblem("vocabulary_refresh_failed", properties: ["reason": reason])
+    }
+
     /// The person flipped the "Share usage with ForIT" switch in the panel.
     static func trackUsageSharingChanged(enabled: Bool) {
         recordMilestone("usage_sharing_changed", properties: ["enabled": String(enabled)])

@@ -2,10 +2,13 @@
 //  WingmanVocabulary.swift
 //  Wingman
 //
-//  Terms the user teaches Wingman: how each one is written, how people say it and what it means.
-//  Ben, 2026-09-05: "fl3xx is Flex, how can we train on that?" and "we'll make this so it could be
-//  any vocabulary that we could teach". The vocabulary is used in four places, all pure functions
-//  here so they can be unit-tested without the app running:
+//  Terms Wingman knows: how each one is written, how people say it and what it means. ForIT Support
+//  is the source of truth for the list (Ben, 2026-09-05: "I still hate that you have a dictionary
+//  where you can delete terms from versus something that's pulled in from ForIT support"): the app
+//  pulls it through the gateway after sign-in and again once it is an hour old, and nothing is
+//  added or removed on the Mac. Until Support has published a list, the built-in seed (FL3XX said
+//  as "Flex", Ben: "fl3xx is Flex, how can we train on that?") applies. The vocabulary is used in
+//  four places, all pure functions here so they can be unit-tested without the app running:
 //    1. Apple Speech contextual keyterms, so the recogniser favours these spellings.
 //    2. The transcript: every spoken form is rewritten to the canonical spelling before the model
 //       sees it, so "how do I turn on TSA screening in Flex" reaches the model as "... in FL3XX".
@@ -13,7 +16,8 @@
 //       the canonical spelling in tool calls.
 //    4. Spoken replies: the canonical spelling is replaced by the first spoken form before
 //       text-to-speech, so the reply says "Flex" instead of spelling out F-L-3-X-X.
-//  Nothing leaves the Mac: the vocabulary is a JSON file in Application Support.
+//  The last list fetched is kept as a JSON file in Application Support so a launch without the
+//  gateway still knows the terms.
 //
 
 import Combine
@@ -135,7 +139,7 @@ struct WingmanVocabulary: Codable, Equatable {
 
         var lines: [String] = []
         lines.append("")
-        lines.append("vocabulary the user has taught you:")
+        lines.append("vocabulary from ForIT Support:")
         for term in usableTerms {
             let canonicalSpelling = term.canonicalSpelling.trimmingCharacters(in: .whitespacesAndNewlines)
             let spokenForms = term.spokenForms
@@ -175,6 +179,63 @@ struct WingmanVocabulary: Codable, Equatable {
         return false
     }
 
+    // MARK: - The list ForIT Support publishes
+
+    /// The gateway tool that returns ForIT Support's vocabulary (for-Support
+    /// `GET /api/admin/vocabulary`, contract in docs/common-proposed/for-support-vocabulary-api.md).
+    /// Never described to the model: the app calls it itself, outside any spoken turn.
+    static let foritSupportToolName = "support_listVocabulary"
+
+    /// The terms in a `support_listVocabulary` result:
+    /// `{"terms":[{"term_id","canonical_spelling","spoken_forms":[…],"meaning"}]}`.
+    /// nil when the text is not that shape (an error text, another route's answer), so the caller
+    /// keeps the list it has. A row without a canonical spelling is dropped; spoken forms may also
+    /// arrive as one comma-separated string. Support's `term_id` becomes the term's id when it is a
+    /// UUID, so a row keeps its identity from one fetch to the next.
+    static func terms(fromForITSupportResultText resultText: String) -> [WingmanVocabularyTerm]? {
+        guard let resultData = resultText.data(using: .utf8),
+              let resultObject = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any],
+              let termObjects = resultObject["terms"] as? [[String: Any]] else {
+            return nil
+        }
+
+        var terms: [WingmanVocabularyTerm] = []
+        for termObject in termObjects {
+            let canonicalSpelling = (termObject["canonical_spelling"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !canonicalSpelling.isEmpty else { continue }
+
+            let spokenForms: [String]
+            if let spokenFormList = termObject["spoken_forms"] as? [String] {
+                spokenForms = spokenFormList
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            } else if let spokenFormText = termObject["spoken_forms"] as? String {
+                spokenForms = Self.spokenForms(fromCommaSeparatedText: spokenFormText)
+            } else {
+                spokenForms = []
+            }
+
+            let meaning = (termObject["meaning"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let termID = (termObject["term_id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID()
+            terms.append(WingmanVocabularyTerm(
+                id: termID,
+                canonicalSpelling: canonicalSpelling,
+                spokenForms: spokenForms,
+                meaning: meaning
+            ))
+        }
+        return terms
+    }
+
+    /// Splits "Flex, flecks" into ["Flex", "flecks"], dropping blanks.
+    static func spokenForms(fromCommaSeparatedText text: String) -> [String] {
+        text.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     // MARK: - Whole-word replacement
 
     /// Replaces `word` wherever it stands on its own (not inside another word), ignoring case.
@@ -195,11 +256,35 @@ struct WingmanVocabulary: Codable, Equatable {
     }
 }
 
-/// Owns the vocabulary on disk. One JSON file per Mac, in Application Support, seeded with the
-/// built-in terms on first use. Every change is written straight away.
+/// Where the vocabulary on this Mac came from.
+enum WingmanVocabularySource: Equatable {
+    /// The built-in seed (`WingmanVocabulary.builtInTerms`): a fresh install, or ForIT Support has
+    /// not published a list yet.
+    case builtIn
+
+    /// The list ForIT Support published, fetched through the gateway at `fetchedAt`.
+    case foritSupport(fetchedAt: Date)
+}
+
+/// What the store writes to disk: the terms and where they came from, so the next launch starts
+/// from the last list ForIT Support published rather than from the seed.
+struct WingmanStoredVocabulary: Codable, Equatable {
+    static let foritSupportSourceName = "forit-support"
+
+    var terms: [WingmanVocabularyTerm]
+    var source: String
+    var fetchedAt: Date?
+}
+
+/// Owns the vocabulary on this Mac. ForIT Support is the source of truth: `CompanionManager` fetches
+/// its list through the gateway and hands it to `replaceWithTermsFromForITSupport`; nothing is added
+/// or removed here, because a term is managed in ForIT Support for every Wingman at once. The last
+/// list is kept in one JSON file in Application Support. A file written by an earlier build, which
+/// let the person edit terms locally, is not carried forward: those terms were never Support's.
 @MainActor
 final class WingmanVocabularyStore: ObservableObject {
     @Published private(set) var vocabulary: WingmanVocabulary
+    @Published private(set) var source: WingmanVocabularySource
 
     private let vocabularyFileURL: URL
 
@@ -216,50 +301,61 @@ final class WingmanVocabularyStore: ObservableObject {
 
     init(vocabularyFileURL: URL = WingmanVocabularyStore.defaultVocabularyFileURL()) {
         self.vocabularyFileURL = vocabularyFileURL
-        self.vocabulary = Self.loadVocabulary(from: vocabularyFileURL) ?? WingmanVocabulary.builtIn
+        if let storedVocabulary = Self.loadStoredVocabulary(from: vocabularyFileURL),
+           storedVocabulary.source == WingmanStoredVocabulary.foritSupportSourceName,
+           let fetchedAt = storedVocabulary.fetchedAt,
+           !storedVocabulary.terms.isEmpty {
+            self.vocabulary = WingmanVocabulary(terms: storedVocabulary.terms)
+            self.source = .foritSupport(fetchedAt: fetchedAt)
+        } else {
+            self.vocabulary = WingmanVocabulary.builtIn
+            self.source = .builtIn
+        }
     }
 
-    /// Adds a term. `spokenFormsText` is what the user typed in the panel: spoken forms separated by
-    /// commas. Returns false, and changes nothing, when the canonical spelling is blank.
+    /// When the list ForIT Support published was last fetched; nil while the seed applies.
+    var lastFetchedFromForITSupportAt: Date? {
+        if case .foritSupport(let fetchedAt) = source {
+            return fetchedAt
+        }
+        return nil
+    }
+
+    /// True when the list should be fetched again: never fetched, or `maximumAge` or older.
+    func isDueForRefresh(maximumAge: TimeInterval, now: Date = Date()) -> Bool {
+        guard let fetchedAt = lastFetchedFromForITSupportAt else { return true }
+        return now.timeIntervalSince(fetchedAt) >= maximumAge
+    }
+
+    /// Replaces the vocabulary with the list ForIT Support published and writes it to disk.
+    /// An empty list means Support has published nothing yet; it changes nothing and returns false,
+    /// so an unseeded Support cannot erase the built-in FL3XX term.
     @discardableResult
-    func addTerm(canonicalSpelling: String, spokenFormsText: String, meaning: String) -> Bool {
-        let trimmedCanonicalSpelling = canonicalSpelling.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedCanonicalSpelling.isEmpty else { return false }
-        let spokenForms = Self.spokenForms(fromCommaSeparatedText: spokenFormsText)
-        let newTerm = WingmanVocabularyTerm(
-            canonicalSpelling: trimmedCanonicalSpelling,
-            spokenForms: spokenForms,
-            meaning: meaning.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-        vocabulary.terms.append(newTerm)
-        saveVocabulary()
+    func replaceWithTermsFromForITSupport(_ publishedTerms: [WingmanVocabularyTerm], fetchedAt: Date) -> Bool {
+        guard !publishedTerms.isEmpty else { return false }
+        vocabulary = WingmanVocabulary(terms: publishedTerms)
+        source = .foritSupport(fetchedAt: fetchedAt)
+        saveStoredVocabulary()
         return true
     }
 
-    func removeTerm(withID termID: UUID) {
-        vocabulary.terms.removeAll { $0.id == termID }
-        saveVocabulary()
-    }
-
-    /// Splits "Flex, flecks" into ["Flex", "flecks"], dropping blanks.
-    static func spokenForms(fromCommaSeparatedText text: String) -> [String] {
-        text.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    private static func loadVocabulary(from fileURL: URL) -> WingmanVocabulary? {
+    private static func loadStoredVocabulary(from fileURL: URL) -> WingmanStoredVocabulary? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode(WingmanVocabulary.self, from: data)
+        return try? JSONDecoder().decode(WingmanStoredVocabulary.self, from: data)
     }
 
-    private func saveVocabulary() {
+    private func saveStoredVocabulary() {
         do {
             let directoryURL = vocabularyFileURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(vocabulary)
+            let storedVocabulary = WingmanStoredVocabulary(
+                terms: vocabulary.terms,
+                source: WingmanStoredVocabulary.foritSupportSourceName,
+                fetchedAt: lastFetchedFromForITSupportAt
+            )
+            let data = try encoder.encode(storedVocabulary)
             try data.write(to: vocabularyFileURL, options: [.atomic])
         } catch {
             print("⚠️ Could not save the vocabulary to \(vocabularyFileURL.path): \(error)")

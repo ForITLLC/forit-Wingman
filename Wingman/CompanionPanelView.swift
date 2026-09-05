@@ -17,11 +17,8 @@ struct CompanionPanelView: View {
     @ObservedObject private var vocabularyStore: WingmanVocabularyStore
     @ObservedObject private var usageSharingPreference: WingmanUsageSharingPreference
 
-    /// The vocabulary editor is collapsed by default so the panel stays short.
+    /// The vocabulary list is collapsed by default so the panel stays short.
     @State private var isVocabularyExpanded = false
-    @State private var newTermCanonicalSpelling = ""
-    @State private var newTermSpokenFormsText = ""
-    @State private var newTermMeaning = ""
 
     init(companionManager: CompanionManager) {
         self._companionManager = ObservedObject(wrappedValue: companionManager)
@@ -880,8 +877,9 @@ struct CompanionPanelView: View {
 
     // MARK: - Vocabulary
 
-    /// Terms the user has taught Wingman (how a term is written, how they say it, what it is), with
-    /// a small form to add one. The header shows the count; the list and the form open on click.
+    /// The terms ForIT Support has published (how a term is written, how people say it), read-only:
+    /// a term is added or retired in ForIT Support so every Wingman learns it at once, never here.
+    /// The header shows the count; the list and its source line open on click.
     private var vocabularySection: some View {
         VStack(spacing: 6) {
             Button(action: {
@@ -912,7 +910,12 @@ struct CompanionPanelView: View {
                     vocabularyTermRow(term)
                 }
 
-                addVocabularyTermForm
+                Text(vocabularySourceLabel)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
             }
         }
         .padding(.vertical, 4)
@@ -923,102 +926,36 @@ struct CompanionPanelView: View {
         return termCount == 1 ? "1 term" : "\(termCount) terms"
     }
 
+    /// Where the list came from, so a person who expects a term can tell whether ForIT Support has
+    /// published its list yet and how fresh this Mac's copy is.
+    private var vocabularySourceLabel: String {
+        switch vocabularyStore.source {
+        case .builtIn:
+            return "Built in until ForIT Support publishes its vocabulary. Terms are managed there, not here."
+        case .foritSupport(let fetchedAt):
+            let relativeDateFormatter = RelativeDateTimeFormatter()
+            relativeDateFormatter.unitsStyle = .short
+            let fetchedAgo = relativeDateFormatter.localizedString(for: fetchedAt, relativeTo: Date())
+            return "From ForIT Support, updated \(fetchedAgo). Terms are managed there, not here."
+        }
+    }
+
     private func vocabularyTermRow(_ term: WingmanVocabularyTerm) -> some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(term.canonicalSpelling)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(DS.Colors.textPrimary)
+        VStack(alignment: .leading, spacing: 1) {
+            Text(term.canonicalSpelling)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(DS.Colors.textPrimary)
 
-                if !term.spokenForms.isEmpty {
-                    let quotedSpokenForms = term.spokenForms.map { "\"\($0)\"" }.joined(separator: ", ")
-                    Text("said \(quotedSpokenForms)")
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundColor(DS.Colors.textTertiary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer()
-
-            Button(action: {
-                vocabularyStore.removeTerm(withID: term.id)
-            }) {
-                Image(systemName: "xmark.circle")
-                    .font(.system(size: 12, weight: .medium))
+            if !term.spokenForms.isEmpty {
+                let quotedSpokenForms = term.spokenForms.map { "\"\($0)\"" }.joined(separator: ", ")
+                Text("said \(quotedSpokenForms)")
+                    .font(.system(size: 11, weight: .regular))
                     .foregroundColor(DS.Colors.textTertiary)
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-            .pointerCursor()
-            .help("Forget \(term.canonicalSpelling)")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
-    }
-
-    /// Three fields and an Add button. Return in any field adds the term; the button is disabled
-    /// until the written form has something in it, because that is the one field that must exist.
-    private var addVocabularyTermForm: some View {
-        VStack(spacing: 4) {
-            vocabularyTextField("Written as, e.g. FL3XX", text: $newTermCanonicalSpelling)
-            vocabularyTextField("Said as, e.g. Flex (commas between forms)", text: $newTermSpokenFormsText)
-            vocabularyTextField("What it is, optional", text: $newTermMeaning)
-
-            HStack {
-                Spacer()
-
-                Button(action: addNewVocabularyTerm) {
-                    Text("Add")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(DS.Colors.textOnAccent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(DS.Colors.accent)
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(!canAddNewVocabularyTerm)
-                .opacity(canAddNewVocabularyTerm ? 1 : 0.4)
-                .pointerCursor(isEnabled: canAddNewVocabularyTerm)
-            }
-        }
-        .padding(.top, 4)
-    }
-
-    private var canAddNewVocabularyTerm: Bool {
-        !newTermCanonicalSpelling.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func addNewVocabularyTerm() {
-        guard canAddNewVocabularyTerm else { return }
-        let wasAdded = vocabularyStore.addTerm(
-            canonicalSpelling: newTermCanonicalSpelling,
-            spokenFormsText: newTermSpokenFormsText,
-            meaning: newTermMeaning
-        )
-        guard wasAdded else { return }
-        newTermCanonicalSpelling = ""
-        newTermSpokenFormsText = ""
-        newTermMeaning = ""
-    }
-
-    private func vocabularyTextField(_ placeholder: String, text: Binding<String>) -> some View {
-        TextField(placeholder, text: text)
-            .textFieldStyle(.plain)
-            .font(.system(size: 11, weight: .regular))
-            .foregroundColor(DS.Colors.textPrimary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
-            )
-            .onSubmit(addNewVocabularyTerm)
     }
 
     // MARK: - Footer

@@ -2,9 +2,10 @@
 //  WingmanVocabularyTests.swift
 //  WingmanTests
 //
-//  Covers the taught vocabulary: the keyterms handed to speech recognition, the transcript
-//  rewrite to the canonical spelling, the pronunciation rewrite for the voice, the prompt
-//  section, the tool policy's use of it and the JSON store. No network, no app running.
+//  Covers the vocabulary: the keyterms handed to speech recognition, the transcript rewrite to
+//  the canonical spelling, the pronunciation rewrite for the voice, the prompt section, the tool
+//  policy's use of it, the parsing of ForIT Support's list and the JSON store. No network, no app
+//  running.
 //
 
 import Foundation
@@ -59,7 +60,7 @@ struct WingmanVocabularyTests {
 
     @Test func thePromptSectionNamesEachTermItsSpokenFormsAndItsMeaning() {
         let section = vocabulary.systemPromptSection()
-        #expect(section.hasPrefix("\nvocabulary the user has taught you:\n"))
+        #expect(section.hasPrefix("\nvocabulary from ForIT Support:\n"))
         #expect(section.contains("- FL3XX, which the user says as \"Flex\": the flight operations platform\n"))
         #expect(section.contains("- Great North, which the user says as \"GNA\" or \"Great North Airlines\"\n"))
         #expect(section.contains("never a client's tenant"))
@@ -114,7 +115,7 @@ struct WingmanVocabularyTests {
 
     // MARK: - Store
 
-    @Test func theStoreSeedsTheBuiltInTermsAndPersistsAdditionsAndRemovals() throws {
+    @Test func theStoreSeedsTheBuiltInTermsUntilForITSupportPublishesAList() throws {
         let temporaryFileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("wingman-vocabulary-tests-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("vocabulary.json")
@@ -122,25 +123,77 @@ struct WingmanVocabularyTests {
 
         let firstStore = WingmanVocabularyStore(vocabularyFileURL: temporaryFileURL)
         #expect(firstStore.vocabulary == WingmanVocabulary.builtIn)
+        #expect(firstStore.source == .builtIn)
+        #expect(firstStore.lastFetchedFromForITSupportAt == nil)
+        #expect(firstStore.isDueForRefresh(maximumAge: 3600))
         #expect(!FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
-        #expect(!firstStore.addTerm(canonicalSpelling: "   ", spokenFormsText: "x", meaning: ""))
-        #expect(firstStore.addTerm(canonicalSpelling: " VMO ", spokenFormsText: "vee em oh, vmo", meaning: " the crew scheduling system "))
-        #expect(firstStore.vocabulary.terms.count == 2)
-        #expect(firstStore.vocabulary.terms[1].canonicalSpelling == "VMO")
-        #expect(firstStore.vocabulary.terms[1].spokenForms == ["vee em oh", "vmo"])
-        #expect(firstStore.vocabulary.terms[1].meaning == "the crew scheduling system")
+        // An empty list is "nothing published yet": the seed stays and nothing is written.
+        #expect(!firstStore.replaceWithTermsFromForITSupport([], fetchedAt: Date()))
+        #expect(firstStore.vocabulary == WingmanVocabulary.builtIn)
+        #expect(firstStore.source == .builtIn)
+        #expect(!FileManager.default.fileExists(atPath: temporaryFileURL.path))
+
+        let fetchedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let publishedTerms = [
+            WingmanVocabularyTerm(canonicalSpelling: "VMO", spokenForms: ["vee em oh", "vmo"], meaning: "the crew scheduling system"),
+        ]
+        #expect(firstStore.replaceWithTermsFromForITSupport(publishedTerms, fetchedAt: fetchedAt))
+        #expect(firstStore.vocabulary.terms == publishedTerms)
+        #expect(firstStore.source == .foritSupport(fetchedAt: fetchedAt))
+        #expect(!firstStore.isDueForRefresh(maximumAge: 3600, now: fetchedAt.addingTimeInterval(1800)))
+        #expect(firstStore.isDueForRefresh(maximumAge: 3600, now: fetchedAt.addingTimeInterval(3600)))
 
         let secondStore = WingmanVocabularyStore(vocabularyFileURL: temporaryFileURL)
         #expect(secondStore.vocabulary == firstStore.vocabulary)
+        #expect(secondStore.lastFetchedFromForITSupportAt == fetchedAt)
+    }
 
-        secondStore.removeTerm(withID: try #require(secondStore.vocabulary.terms.first?.id))
-        let thirdStore = WingmanVocabularyStore(vocabularyFileURL: temporaryFileURL)
-        #expect(thirdStore.vocabulary.terms.map(\.canonicalSpelling) == ["VMO"])
+    @Test func aFileFromABuildThatLetPeopleEditTermsLocallyIsNotCarriedForward() throws {
+        let temporaryFileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wingman-vocabulary-tests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("vocabulary.json")
+        defer { try? FileManager.default.removeItem(at: temporaryFileURL.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: temporaryFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        // The shape the 0.1.5x builds wrote: terms only, added and removed in the panel.
+        let locallyEditedFile = """
+        {"terms":[{"id":"1B4E28BA-2FA1-11D2-883F-0016D3CCA427","canonicalSpelling":"Local","spokenForms":["loco"],"meaning":""}]}
+        """
+        try Data(locallyEditedFile.utf8).write(to: temporaryFileURL)
+
+        let store = WingmanVocabularyStore(vocabularyFileURL: temporaryFileURL)
+        #expect(store.vocabulary == WingmanVocabulary.builtIn)
+        #expect(store.source == .builtIn)
+    }
+
+    // MARK: - ForIT Support's list
+
+    @Test func theSupportResultBecomesTermsAndAnythingElseBecomesNil() throws {
+        let resultText = """
+        {"terms":[\
+        {"term_id":"1B4E28BA-2FA1-11D2-883F-0016D3CCA427","canonical_spelling":" FL3XX ","spoken_forms":["Flex","  "],"meaning":" the flight operations platform "},\
+        {"term_id":"not-a-uuid","canonical_spelling":"VMO","spoken_forms":"vee em oh, vmo"},\
+        {"canonical_spelling":"   ","spoken_forms":["blank"],"meaning":"dropped"}\
+        ],"total":3}
+        """
+        let terms = try #require(WingmanVocabulary.terms(fromForITSupportResultText: resultText))
+        #expect(terms.count == 2)
+        #expect(terms[0].id == UUID(uuidString: "1B4E28BA-2FA1-11D2-883F-0016D3CCA427"))
+        #expect(terms[0].canonicalSpelling == "FL3XX")
+        #expect(terms[0].spokenForms == ["Flex"])
+        #expect(terms[0].meaning == "the flight operations platform")
+        #expect(terms[1].canonicalSpelling == "VMO")
+        #expect(terms[1].spokenForms == ["vee em oh", "vmo"])
+        #expect(terms[1].meaning == "")
+
+        #expect(WingmanVocabulary.terms(fromForITSupportResultText: "{\"terms\":[]}") == [])
+        #expect(WingmanVocabulary.terms(fromForITSupportResultText: "Error: 404 Not Found") == nil)
+        #expect(WingmanVocabulary.terms(fromForITSupportResultText: "{\"articles\":[]}") == nil)
     }
 
     @Test func spokenFormsSplitOnCommasAndDropBlanks() {
-        #expect(WingmanVocabularyStore.spokenForms(fromCommaSeparatedText: "Flex, flecks ,, ") == ["Flex", "flecks"])
-        #expect(WingmanVocabularyStore.spokenForms(fromCommaSeparatedText: "") == [])
+        #expect(WingmanVocabulary.spokenForms(fromCommaSeparatedText: "Flex, flecks ,, ") == ["Flex", "flecks"])
+        #expect(WingmanVocabulary.spokenForms(fromCommaSeparatedText: "") == [])
     }
 }

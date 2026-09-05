@@ -629,3 +629,45 @@ order's substance for this repo was the citation.
   is itself the signal that no article backed the answer.
 - for-Support's search improves underneath this without a Wingman change; when it starts honouring
   `category`, FL3XX questions stop matching ForIT's own how-tos.
+
+## 013 — The vocabulary is ForIT Support's, pulled through the gateway; nothing is taught per Mac
+
+Date: 2026-09-05. Ben, on seeing the 0.1.5x panel: "I still hate that you have a dictionary where you can
+delete terms from versus something that's pulled in from ForIT support, because that's super valuable in
+my mind."
+
+### Context
+
+The vocabulary shipped that morning (FL3XX said as "Flex", and any other term) lived in a JSON file per
+Mac with an add form and a remove button in the panel. That made every Mac its own authority: a term ForIT
+support learned had to be typed on each laptop, and any person could delete FL3XX. The knowledge base
+those terms describe already lives in for-Support behind gateway tools the app calls with the person's
+own token (decisions 003 and 012), so the list belongs there too.
+
+### Decision
+
+- for-Support owns the vocabulary: a `wingman_vocabulary` table, an admin page to add, edit and retire
+  terms, and one read-only route `GET /api/admin/vocabulary` the gateway mounts as
+  `support_listVocabulary`. Proposal: `docs/common-proposed/for-support-vocabulary-api.md`. The write
+  routes are cookie-session only and are not declared in the OpenAPI spec, so the gateway, Wingman and
+  the model can only read.
+- Wingman pulls the list itself, outside any spoken turn: after sign-in and on push-to-talk key-down
+  once the stored copy is an hour old, and only when the gateway's `tools/list` exposes the tool. The tool
+  is never described to the model. The last list is kept in the same Application Support file, now with
+  its source and fetch time; a failure keeps the current list, logs `vocabulary_refresh_failed`, and is
+  not retried for five minutes.
+- The panel's Vocabulary section is read-only and says where the list came from and how fresh it is.
+  The add form and the remove button are gone.
+- Until for-Support ships the route, and whenever Support returns an empty list, the built-in seed
+  (FL3XX) applies. A file written by the per-Mac editor is not carried forward: those terms were never
+  Support's.
+
+### Consequences
+
+- A term entered once in ForIT Support reaches every Wingman at its next sign-in or within the hour.
+- Nobody can delete FL3XX from a laptop, and nobody can teach a laptop a private term; that is the
+  point, and the cost is that a new term waits for an admin.
+- The app gains one background gateway call per hour per signed-in Mac and no new secret, route or
+  relay change.
+- for-Support's side is a proposal until the for-Support session ships it; Wingman's behaviour with the
+  route absent is the same as before this decision, minus the editor.
