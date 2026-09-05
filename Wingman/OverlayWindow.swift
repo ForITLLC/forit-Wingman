@@ -302,19 +302,15 @@ struct BlueCursorView: View {
             // During cursor following: fast spring animation for snappy tracking.
             // During navigation: NO implicit animation — the frame-by-frame bezier
             // timer controls position directly at 60fps for a smooth arc flight.
-            // The pointer is built like the ForIT mark: a cyan face inside a line. The navy line
-            // gives it contrast on light screens; the white halo outside the line keeps it visible
-            // on dark ones. Strokes are centred on the edge, so the fill sits between the halo and
-            // the line in the ZStack.
-            ZStack {
-                Triangle()
-                    .stroke(DS.Colors.overlayCursorHaloColor, style: StrokeStyle(lineWidth: 4, lineJoin: .round))
-                Triangle()
-                    .fill(DS.Colors.overlayCursorColor)
-                Triangle()
-                    .stroke(DS.Colors.overlayCursorOutlineColor, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
-            }
-                .frame(width: 16, height: 16)
+            // The pointer is the ForIT mark itself, turned so the corner where its two cyan
+            // chevron arms meet points straight up in the image (`WingmanPointer`, rendered from
+            // docs/brand/wingman-pointer.svg with the navy line and white halo baked in). The
+            // rotation below then aims that corner: -35 degrees at rest, the flight tangent while
+            // pointing, exactly as it did for the old triangle.
+            Image("WingmanPointer")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 24, height: 24)
                 .rotationEffect(.degrees(triangleRotationDegrees))
                 .shadow(color: DS.Colors.overlayCursorColor, radius: 8 + (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
                 .scaleEffect(buddyFlightScale)
