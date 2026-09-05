@@ -582,3 +582,50 @@ model must never be the thing that decides a ticket may be filed.
   and a hold pages Ben; filing a real customer's ticket is Ben's call, not a test.
 - for-Support: declare `consent` (and `skipAutoReply`) in the OpenAPI body schema for the create route,
   so the gateway forwards them. Until then every confirming call from Wingman is held, by design.
+
+## 012 — Wingman defines no knowledge base search of its own; it consumes for-Support's and cites the article
+
+Date: 2026-09-05. Work order WO#1972 from the AoE-Commander, carrying Ben's ruling recorded in for-FL3XX
+`docs/design/kb-search-ownership.md` (`76e3eba`): "I saw it define like a tool within Wingman, which I
+didn't like. I'm giving you the order, go for it."
+
+### Context
+
+Two engines had grown over the same FL3XX content: for-Support's `LIKE`-and-recency search behind
+`GET /api/admin/kb/search`, and a BM25 index in for-FL3XX's own MCP tools (`fl3xx_docs_search`). They
+returned different answers for the same question. Ben ruled that ForIT Support owns the content and the
+search, that the for-FL3XX tools are corpus engineering and not a product surface, and that Wingman
+consumes Support through the gateway tools that already exist and cites the Support article in its answer.
+Wingman already had no index and no copy of any article (decision 003: the two gateway tools, results
+condensed for the model, an article body cut at 12,000 characters and kept for the turn only), so the
+order's substance for this repo was the citation.
+
+### Decision
+
+- **Wingman defines no knowledge base search, keeps no content and runs no sync.** `support_searchKbArticles`
+  and `support_getKbArticle` through the for-mcp gateway, with the person's own token, are the only way an
+  article reaches the model. The catalog describes those two tools to the model (an Anthropic tool definition
+  is how a model can call anything) and applies the app-side policy; that description is not a search.
+- **The category filter is passed through.** The model is told to pass `category` "FL3XX" for an FL3XX
+  question; the app forwards it as given. for-Support's ranked search (WO#1971) is what will honour it; until
+  its schema declares the filter the gateway drops it, and nothing in Wingman depends on it.
+- **Every answer read from an article cites it, in writing, never aloud.** The prompt has the written answer
+  end with one line `Source: <article title> — <url>`, using the url for-Support returned (the tenant's public
+  page for a public article, the admin page for an internal one) and never one the model made up. The
+  sentence splitter never speaks from that line onward, and any web address elsewhere in a sentence is
+  removed from what is spoken: a URL read aloud is noise, and the screen already shows it.
+- **The app, not the model, knows which article was read.** The `support_getKbArticle` result's title and url
+  become `CompanionManager.lastCitedKnowledgeBaseArticle` (cleared when the next question starts). The panel
+  shows it as a Source row with an Open button, because the overlay bubble is click-through and a link there
+  cannot be clicked. The Mac log records `kb_article_cited url=…` at notice level, so `log show` proves which
+  article an answer cited without holding the answer.
+
+### Consequences
+
+- An FL3XX answer names the article and ends with its Support page; the person opens it from the panel.
+- Nothing new leaves the Mac: the citation is the url for-Support returned, and the usage report (decision
+  010) already carried the spoken answer, which now includes the Source line.
+- A model that answers from general knowledge (decision 009) writes no Source line, so the absence of one
+  is itself the signal that no article backed the answer.
+- for-Support's search improves underneath this without a Wingman change; when it starts honouring
+  `category`, FL3XX questions stop matching ForIT's own how-tos.

@@ -5,6 +5,9 @@
 //  Cuts the model's streamed reply into sentences that can be sent to text-to-speech before the
 //  reply is finished, so the first sentence is heard while the rest is still being written.
 //  Pure and unit-tested: it never speaks, it only decides which text is ready to be spoken.
+//  Two things in a reply are shown but never spoken: the pointing tag, and the Source line that
+//  cites the ForIT Support article the answer came from (decision 012), because a web address
+//  read aloud is noise and the screen and the panel already show it.
 //
 
 import Foundation
@@ -14,6 +17,23 @@ struct WingmanSpokenSentenceSplitter {
     /// Nothing from it onward is ever spoken, and a partial tag at the end of the stream ("[PO")
     /// is held back until the stream shows whether it is the tag or ordinary text.
     static let pointingTagPrefix = "[POINT"
+
+    /// The citation the prompt asks for as the last line of a written answer:
+    /// `Source: <article title> — <url>`. Nothing from that line onward is spoken.
+    static let sourceLinePrefix = "Source:"
+
+    /// A line that starts with the Source prefix (leading spaces allowed, any case).
+    private static let sourceLineRegularExpression = try! NSRegularExpression(
+        pattern: "^[ \\t]*source:",
+        options: [.caseInsensitive, .anchorsMatchLines]
+    )
+
+    /// A web address anywhere in a sentence. The punctuation that closes the sentence around it
+    /// ("…/kb/tsa, under Integrations.") is not part of the address and stays spoken.
+    private static let webAddressRegularExpression = try! NSRegularExpression(
+        pattern: "https?://\\S*[^\\s.,;:!?)\\]]",
+        options: [.caseInsensitive]
+    )
 
     /// The first sentence is released at the first boundary, however short, so speech starts as
     /// early as possible. Later sentences wait until at least this many characters are pending,
@@ -79,18 +99,51 @@ struct WingmanSpokenSentenceSplitter {
         return remainingText.isEmpty ? nil : remainingText
     }
 
-    /// The part of the text that may be spoken: everything before the pointing tag, minus a
-    /// trailing fragment that could still turn into the tag.
+    /// The part of the text that may be spoken: everything before the pointing tag and before the
+    /// Source line, minus a trailing fragment that could still turn into the tag. A partial Source
+    /// line needs no such hold: it sits after a newline, and text after a newline is only released
+    /// at a later boundary, by which time the line is either the citation or ordinary text.
     static func speakablePortion(of text: String) -> String {
-        if let tagRange = text.range(of: pointingTagPrefix) {
-            return String(text[..<tagRange.lowerBound])
+        var speakableText = text
+        if let tagRange = speakableText.range(of: pointingTagPrefix) {
+            speakableText = String(speakableText[..<tagRange.lowerBound])
+        }
+        let wholeRange = NSRange(speakableText.startIndex..<speakableText.endIndex, in: speakableText)
+        if let sourceLineMatch = sourceLineRegularExpression.firstMatch(in: speakableText, options: [], range: wholeRange),
+           let sourceLineRange = Range(sourceLineMatch.range, in: speakableText) {
+            speakableText = String(speakableText[..<sourceLineRange.lowerBound])
         }
         for partialTagLength in stride(from: pointingTagPrefix.count - 1, through: 1, by: -1) {
             let partialTag = String(pointingTagPrefix.prefix(partialTagLength))
-            if text.hasSuffix(partialTag) {
-                return String(text.dropLast(partialTagLength))
+            if speakableText.hasSuffix(partialTag) {
+                return String(speakableText.dropLast(partialTagLength))
             }
         }
-        return text
+        return speakableText
+    }
+
+    /// What text-to-speech gets for one released sentence: nil when nothing should be said (a
+    /// Source line, or a sentence that was only a web address), otherwise the sentence with every
+    /// web address removed and the spacing closed up.
+    static func speakableText(ofSentence sentence: String) -> String? {
+        let trimmedSentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedSentence.lowercased().hasPrefix(sourceLinePrefix.lowercased()) {
+            return nil
+        }
+        let wholeRange = NSRange(trimmedSentence.startIndex..<trimmedSentence.endIndex, in: trimmedSentence)
+        let withoutWebAddresses = webAddressRegularExpression.stringByReplacingMatches(
+            in: trimmedSentence,
+            options: [],
+            range: wholeRange,
+            withTemplate: ""
+        )
+        let spacingClosedUp = withoutWebAddresses
+            .replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: " ([,.;:!?])", with: "$1", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard spacingClosedUp.rangeOfCharacter(from: .alphanumerics) != nil else {
+            return nil
+        }
+        return spacingClosedUp
     }
 }
