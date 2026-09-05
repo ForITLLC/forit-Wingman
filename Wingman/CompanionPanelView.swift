@@ -118,14 +118,12 @@ struct CompanionPanelView: View {
 
     // MARK: - Header
 
+    /// The ForIT mark, upright, beside the name (Ben, 2026-09-05: "Should you add the ForIT logo
+    /// anywhere else in here?"); the status dot moved next to the status text it describes.
     private var panelHeader: some View {
         HStack {
             HStack(spacing: 8) {
-                // Animated status dot
-                Circle()
-                    .fill(statusDotColor)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: statusDotColor.opacity(0.6), radius: 4)
+                foritMark(pointSize: 18)
 
                 Text("Wingman")
                     .font(.system(size: 14, weight: .semibold))
@@ -134,9 +132,17 @@ struct CompanionPanelView: View {
 
             Spacer()
 
-            Text(statusText)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(DS.Colors.textTertiary)
+            HStack(spacing: 6) {
+                // Animated status dot
+                Circle()
+                    .fill(statusDotColor)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: statusDotColor.opacity(0.6), radius: 4)
+
+                Text(statusText)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+            }
 
             Button(action: {
                 NotificationCenter.default.post(name: .wingmanDismissPanel, object: nil)
@@ -155,6 +161,17 @@ struct CompanionPanelView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+
+    /// The upright ForIT mark (`WingmanMark` image set, rendered from docs/brand/wingman-mark.svg:
+    /// the app icon's line, centre and facets without the navy tile and without the pointer's turn).
+    private func foritMark(pointSize: CGFloat) -> some View {
+        Image("WingmanMark")
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: pointSize, height: pointSize)
+            .accessibilityLabel("ForIT")
     }
 
     // MARK: - Permissions Copy
@@ -186,9 +203,14 @@ struct CompanionPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("This is Wingman.")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(DS.Colors.textSecondary)
+                // First run: the mark introduces the product before the permissions list does.
+                HStack(spacing: 10) {
+                    foritMark(pointSize: 28)
+
+                    Text("This is Wingman.")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(DS.Colors.textSecondary)
+                }
 
                 Text("ForIT's voice assistant for support work. Hold Control+Option, ask a question, and it answers using your screen and the ForIT tools your account can reach.")
                     .font(.system(size: 11))
