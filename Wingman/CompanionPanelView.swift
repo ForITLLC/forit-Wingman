@@ -14,10 +14,18 @@ struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     // Observed on its own: SwiftUI does not re-render for changes inside a nested ObservableObject.
     @ObservedObject private var signInManager: WingmanEntraSignInManager
+    @ObservedObject private var vocabularyStore: WingmanVocabularyStore
+
+    /// The vocabulary editor is collapsed by default so the panel stays short.
+    @State private var isVocabularyExpanded = false
+    @State private var newTermCanonicalSpelling = ""
+    @State private var newTermSpokenFormsText = ""
+    @State private var newTermMeaning = ""
 
     init(companionManager: CompanionManager) {
         self._companionManager = ObservedObject(wrappedValue: companionManager)
         self._signInManager = ObservedObject(wrappedValue: companionManager.signInManager)
+        self._vocabularyStore = ObservedObject(wrappedValue: companionManager.vocabularyStore)
     }
 
     var body: some View {
@@ -43,6 +51,9 @@ struct CompanionPanelView: View {
                     .frame(height: 12)
 
                 modelPickerRow
+                    .padding(.horizontal, 16)
+
+                vocabularySection
                     .padding(.horizontal, 16)
             }
 
@@ -654,7 +665,7 @@ struct CompanionPanelView: View {
         }) {
             Text(title)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(DS.Colors.textPrimary)
+                .foregroundColor(DS.Colors.textOnAccent)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(
@@ -710,6 +721,149 @@ struct CompanionPanelView: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    // MARK: - Vocabulary
+
+    /// Terms the user has taught Wingman (how a term is written, how they say it, what it is), with
+    /// a small form to add one. The header shows the count; the list and the form open on click.
+    private var vocabularySection: some View {
+        VStack(spacing: 6) {
+            Button(action: {
+                isVocabularyExpanded.toggle()
+            }) {
+                HStack {
+                    Text("Vocabulary")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+
+                    Spacer()
+
+                    Text(vocabularyTermCountLabel)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(DS.Colors.textTertiary)
+
+                    Image(systemName: isVocabularyExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            if isVocabularyExpanded {
+                ForEach(vocabularyStore.vocabulary.terms) { term in
+                    vocabularyTermRow(term)
+                }
+
+                addVocabularyTermForm
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var vocabularyTermCountLabel: String {
+        let termCount = vocabularyStore.vocabulary.terms.count
+        return termCount == 1 ? "1 term" : "\(termCount) terms"
+    }
+
+    private func vocabularyTermRow(_ term: WingmanVocabularyTerm) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(term.canonicalSpelling)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textPrimary)
+
+                if !term.spokenForms.isEmpty {
+                    let quotedSpokenForms = term.spokenForms.map { "\"\($0)\"" }.joined(separator: ", ")
+                    Text("said \(quotedSpokenForms)")
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            Button(action: {
+                vocabularyStore.removeTerm(withID: term.id)
+            }) {
+                Image(systemName: "xmark.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Forget \(term.canonicalSpelling)")
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// Three fields and an Add button. Return in any field adds the term; the button is disabled
+    /// until the written form has something in it, because that is the one field that must exist.
+    private var addVocabularyTermForm: some View {
+        VStack(spacing: 4) {
+            vocabularyTextField("Written as, e.g. FL3XX", text: $newTermCanonicalSpelling)
+            vocabularyTextField("Said as, e.g. Flex (commas between forms)", text: $newTermSpokenFormsText)
+            vocabularyTextField("What it is, optional", text: $newTermMeaning)
+
+            HStack {
+                Spacer()
+
+                Button(action: addNewVocabularyTerm) {
+                    Text("Add")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textOnAccent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(DS.Colors.accent)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canAddNewVocabularyTerm)
+                .opacity(canAddNewVocabularyTerm ? 1 : 0.4)
+                .pointerCursor(isEnabled: canAddNewVocabularyTerm)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private var canAddNewVocabularyTerm: Bool {
+        !newTermCanonicalSpelling.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func addNewVocabularyTerm() {
+        guard canAddNewVocabularyTerm else { return }
+        let wasAdded = vocabularyStore.addTerm(
+            canonicalSpelling: newTermCanonicalSpelling,
+            spokenFormsText: newTermSpokenFormsText,
+            meaning: newTermMeaning
+        )
+        guard wasAdded else { return }
+        newTermCanonicalSpelling = ""
+        newTermSpokenFormsText = ""
+        newTermMeaning = ""
+    }
+
+    private func vocabularyTextField(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField(placeholder, text: text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 11, weight: .regular))
+            .foregroundColor(DS.Colors.textPrimary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+            )
+            .onSubmit(addNewVocabularyTerm)
     }
 
     // MARK: - Footer
@@ -770,9 +924,9 @@ struct CompanionPanelView: View {
         case .idle:
             return DS.Colors.success
         case .listening:
-            return DS.Colors.blue400
+            return DS.Colors.accentText
         case .processing, .responding:
-            return DS.Colors.blue400
+            return DS.Colors.accentText
         }
     }
 

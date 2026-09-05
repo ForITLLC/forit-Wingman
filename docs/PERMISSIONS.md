@@ -37,7 +37,7 @@ Role assignment is an Entra enterprise-app assignment, done by a ForIT admin, ne
 | "Summarise ticket `<n>` and what is blocking it" | `support_listTickets` (by id) | Viewer | none |
 | "Draft a reply to ticket `<n>`" | `support_addTicketNote` | Operator | Writes an **internal note prefixed `DRAFT (Wingman):`** on the ticket. Never `support_replyToTicket`, never an email. |
 | "What is the status of flight `<id>`?" | `forit_avops_search_flights` | Viewer | none |
-| "How do I `<do something>` in FL3XX?" (or any supported system) | `support_searchKbArticles`, then `support_getKbArticle` | Viewer | none. Searches the `forit` tenant's published articles (including the staff-only FL3XX mirror, `visibility: internal`) unless the user names a client; the app fixes the default tenant, the model cannot widen it. |
+| "How do I `<do something>` in FL3XX?" (or any supported system) | `support_searchKbArticles`, then `support_getKbArticle` | Viewer | none. Searches the `forit` tenant's published articles (including the staff-only FL3XX mirror, `visibility: internal`) unless the user names a client; the app fixes the default tenant, the model cannot widen it, and a product name from the taught vocabulary (`FL3XX`, "Flex") given as the tenant is sent to the default tenant instead. |
 | Anything that sends, deletes, assigns, bulk-updates, or provisions | `support_replyToTicket`, `support_deleteTicket`, `support_assignTicket`, `support_bulkUpdateTickets`, `support_provisioning*` | **not exposed** | Wingman does not register these tools with the model at all. |
 
 The tool allow-list is a static array in the app (`WingmanToolCatalog.swift`); a tool not on it is

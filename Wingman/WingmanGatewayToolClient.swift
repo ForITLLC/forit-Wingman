@@ -198,6 +198,20 @@ final class WingmanGatewayToolClient {
 
     /// Maps a non-2xx gateway answer to the error the pipeline reacts to. 401 and 403 carry the
     /// reason in `WWW-Authenticate` (error_description) or in a JSON body.
+    /// A stable analytics label for a tool that ran and reported failure: `tool_error_http_401`
+    /// when the gateway's error text names an HTTP status ("HTTP error 401", "status code 404",
+    /// `"status": 403`), `tool_error` otherwise. The label carries the status only, never the body,
+    /// so the Mac log says why a tool failed without holding any data.
+    static func failureOutcomeLabel(forErrorResultText errorText: String) -> String {
+        let statusPattern = "(?:HTTP|status(?:_code| code)?)[^0-9]{0,12}([1-5][0-9]{2})(?![0-9])"
+        guard let regularExpression = try? NSRegularExpression(pattern: statusPattern, options: [.caseInsensitive]),
+              let match = regularExpression.firstMatch(in: errorText, options: [], range: NSRange(errorText.startIndex..<errorText.endIndex, in: errorText)),
+              let statusRange = Range(match.range(at: 1), in: errorText) else {
+            return "tool_error"
+        }
+        return "tool_error_http_\(errorText[statusRange])"
+    }
+
     static func error(forStatusCode statusCode: Int, responseBody: Data, httpResponse: HTTPURLResponse?) -> WingmanGatewayToolError {
         let detail = failureDetail(
             responseBody: responseBody,
