@@ -305,8 +305,15 @@ before. The hardened runtime stays off (library validation wants a Team ID, see 
 
 ### Consequences
 
-- The designated requirement becomes `identifier "io.forit.wingman" and certificate leaf = H"…"`, the
+- The designated requirement becomes `identifier "io.forit.wingman" and certificate root = H"…"`, the
   same for every build signed by this certificate, so grants made on one build hold on the next.
+- A Mac that granted permissions to an ad-hoc build needs a one-time reset when it first runs a
+  certificate-signed build. macOS keeps the ad-hoc rows, keyed to that build's cdhash, shows their
+  switches as ON, and denies the new build without prompting (`tccd`: `matchesCodeRequirement …
+  status: -67050`, `matches platform requirements: No`, `notified-of-denial`). Seen on Ben's MacBook
+  on 2026-09-05 after 0.1.35: several restarts and re-grants changed nothing until
+  `tccutil reset Accessibility io.forit.wingman` and `tccutil reset ScreenCapture io.forit.wingman`,
+  after which the app prompted again and the new rows carry the certificate requirement.
 - Gatekeeper treats the app exactly as it treated the ad-hoc build (unidentified developer, not
   notarised). Nothing about distribution changes.
 - The private key exists only in the repo secret. Losing or rotating it means one more grant of each
