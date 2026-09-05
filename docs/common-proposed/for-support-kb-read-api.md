@@ -163,9 +163,11 @@ written to for-Support; the set is ready for the day Ben says yes.
    and `q=password` on tenant `forit` answer `{tenant: "forit", total: 0, articles: []}` (no FL3XX content yet,
    see below); `tenant=no-such-tenant` is `404 Tenant not found`; `support_getKbArticle` on a published `forit`
    article answers the full row plus `tenant_slug` and `url`; an unknown id is `404 Article not found`.
-   One difference from the example above: the `url` for-Support builds is `https://forit.io/forit/kb/<slug>`,
-   not `https://support.forit.io/…`; Wingman passes it through, so the model cites whatever for-Support
-   considers the public address.
+   The first read returned `url` as `https://forit.io/forit/kb/<slug>`, a dead link (Cloudflare redirect to
+   the marketing site); for-Support fixed it the same day (`a62b09f`, evidence `dff6772`): ForIT-owned hosts
+   now fall through to the admin host, client custom hosts stay verbatim. Re-checked through the gateway after
+   the fix: `https://support.forit.io/forit/kb/<slug>`, as in the example above. Wingman passes the value
+   through unchanged.
 3. **Pending, needs Ben's Mac.** In Wingman (signed in as ForIT staff): "how do I turn on TSA screening in
    FL3XX" → the model calls search, then get, names the article, and does not describe steps the article does
    not contain. With the KB as it is today the same question gets "the knowledge base has nothing on that yet".
