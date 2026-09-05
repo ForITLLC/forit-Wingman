@@ -795,3 +795,103 @@ Mac but capture, point and speak.
 - Until for-Support ships the url attribute and the key fix, the inventory half is dormant: the
   fetch logs `inventory_apps_refresh_failed reason=tool_error_http_401` hourly and the Apps section
   does not appear. Installed apps and spoken addresses work now.
+
+## 016 — Feedback about any ForIT app is filed by voice as a story under the ForIT board's "App Feedback" epic
+
+**Date:** 2026-09-05
+**Status:** Accepted
+
+### Context
+
+Ben, 2026-09-05: "I also want open to anyone the um, if you look at four forms, we have like give
+feedback on this app I want them to basically be able to inject feedback via this tool if that
+makes sense." for-Forms has a "Give feedback on this app" intake that lands on the for-agile board
+as a story with `source: app-feedback` under an "App Feedback" epic of the tenant's master plan
+(Great North already has such an epic from that intake). Wingman is on every ForIT Mac and hears
+the person; a spoken "tell the team the Forms export is slow" should land in the same place.
+
+### Options
+
+1. A feedback form in the panel that posts to the relay, which writes to the board. Adds a route,
+   a board key on the relay and a typed form to a voice app.
+2. Wingman's own gateway tool loop: the model calls a local `send_app_feedback` tool, the app files
+   the story through the gateway's board tools (`forit_agile_list_clients`, `forit_agile_list_stories`,
+   `forit_agile_create_story`) with the person's own gateway token. No new route, no new key.
+3. A ticket in for-Support instead of a story. Feedback is not a ticket: nobody is waiting on it
+   and it belongs in the product backlog the team already grooms.
+
+### Decision
+
+Option 2. `WingmanAppFeedback.swift` defines the tool (`send_app_feedback`, two arguments: the app
+the feedback is about and the feedback itself), the prompt rules and the filing:
+
+- The tool is offered only while the signed-in person's `tools/list` exposes all three board tools
+  (`forit_agile_*` is on the gateway's team surface); otherwise neither the tool nor its prompt
+  section is described, so nobody hears about a feedback feature they cannot use.
+- The story goes to the ForIT Master Plan project of tenant `forit` (found by name through
+  `forit_agile_list_clients`; the first `forit` project when the name is absent) under the epic
+  titled "App Feedback" (found through `forit_agile_list_stories` with `type: epic`, created once
+  with `forit_agile_create_story` when missing). The project and epic ids are kept for the
+  sign-in as `appFeedbackAnchor` and looked up again after a sign-out or when the board says the
+  parent is gone.
+- The story mirrors for-Forms' intake: `type: user-story`, `source: app-feedback`, `app: Wingman`
+  (the producer), `functionalArea` = the app the feedback is about, `parentId` = the epic,
+  `createdBy` = the signed-in email. The title is "App feedback: " plus the feedback's first line
+  (500 characters at most); the description is the feedback verbatim (4,000 characters at most)
+  followed by "Submitted by <name> (<email>) at <time> with Wingman", because the gateway
+  creates every story under its automation identity.
+- The person hears the story number back ("filed as story 183"); the Mac log gets
+  `app_feedback_filed story=183` at notice level and never the feedback. A rejected create is
+  returned to the model with the board's reasons so it can say what happened; access, role and
+  transport failures are handled the way every gateway tool's are.
+
+### Consequences
+
+- The feedback is written to the board from the Mac with the person's own token, so who can file
+  is whoever the gateway lets call the board tools; a person without the team surface never sees
+  the tool.
+- Three gateway calls the first time in a sign-in, one after that.
+- The relay stays out of it: it forwards the tool definition and the `tool_use` / `tool_result`
+  blocks like any other and never sees the board.
+
+## 017 — Wingman quits by voice through one local tool and opens at login unless switched off in the panel
+
+**Date:** 2026-09-05
+**Status:** Accepted
+
+### Context
+
+Ben, 2026-09-05: "Now I think we also need a command to like quit wingman, and then if they press
+the key while wingman's not open, can that restart it?" The second half is impossible as asked: a
+quit app has no process to hear the key, and a second always-on process that only listens for the
+key is the thing Wingman is. The first half was missing: the only way to quit was the panel's Quit
+button, and a person who cannot find the menu bar icon (Christine on a notch MacBook) has no button.
+
+### Decision
+
+- `WingmanQuitCommand.swift`: one local tool, `quit_wingman`, with no argument, offered every turn
+  after the launcher. The model calls it when the person asks Wingman itself to quit ("quit
+  wingman", "close yourself"), never for another app. The app answers that it will quit as soon as
+  the goodbye has been spoken and sets `quitRequestedByVoice`; after the turn's last sentence has
+  played and the usage report has been posted, `terminateAfterGoodbyeIfRequested` waits one second
+  and calls `NSApp.terminate`. A new turn in the meantime (the person pressed the key to say "wait")
+  clears the flag and nothing quits. The Mac log gets `quit_requested_by_voice`.
+- `WingmanLoginItem.swift`: the "Open at Login" switch, on by default, next to the usage switch in
+  the panel. Before this the app registered itself as a login item at every launch with no way to
+  say no inside Wingman. Now the launch registers only while the switch is on and macOS does not
+  have the item yet; the switch registers or unregisters through `SMAppService` first and only then
+  changes, so a service failure never shows a state macOS does not have. Turning Wingman off under
+  System Settings > General > Login Items is respected: launch never unregisters and never fights it.
+- The nearest thing to "restart it when the key is pressed" is therefore that Wingman is running
+  whenever the Mac is, and a person who quit it by voice reopens it from the Applications folder
+  (the model says so in its goodbye).
+- The menu bar icon being hidden behind the notch is a Mac setting, not a Wingman one:
+  `docs/common-proposed/for-jamf-menu-bar-item-spacing.md` proposes the two global defaults
+  (`NSStatusItemSpacing`, `NSStatusItemSelectionPadding`) as a Jamf policy for Macs without
+  Bartender, which writes the same keys.
+
+### Consequences
+
+- A person can quit Wingman without the panel, and a quit by mistake costs a trip to the
+  Applications folder or a login.
+- Nothing about permissions changes: `SMAppService` needs none, and the quit tool sends nothing.

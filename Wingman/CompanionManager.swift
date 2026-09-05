@@ -90,6 +90,10 @@ final class CompanionManager: ObservableObject {
     /// and whether the person has seen the disclosure. See WingmanUsageSharing.swift.
     let usageSharingPreference = WingmanUsageSharingPreference()
 
+    /// Whether Wingman registers itself to open at login (on unless switched off in the panel;
+    /// decision 017). See WingmanLoginItem.swift.
+    let loginItemPreference = WingmanLoginItemPreference()
+
     /// When the push-to-talk key last went down, so the turn's usage report can say how long the
     /// person spoke before the transcript was final.
     private var pushToTalkKeyDownDate: Date?
@@ -157,6 +161,15 @@ final class CompanionManager: ObservableObject {
     /// or the person says no; a stale one is refused by the catalog.
     private var pendingTicketPreview: WingmanPendingTicketPreview?
 
+    /// The ForIT board project and "App Feedback" epic the last feedback was filed under
+    /// (decision 016), kept for this sign-in so the next feedback skips the two lookups. Dropped
+    /// on sign-out and when the board says the epic is gone.
+    private var appFeedbackAnchor: WingmanAppFeedbackAnchor?
+
+    /// Set when the model called `quit_wingman` in the current turn (decision 017): the app
+    /// terminates once the goodbye of that turn has been spoken. A new turn clears it.
+    private var quitRequestedByVoice = false
+
     /// Cuts the reply into sentences for text-to-speech while it streams. Reset for every model
     /// call; held here (not in a local) because the stream callback is @Sendable and cannot
     /// mutate a captured local.
@@ -212,6 +225,10 @@ final class CompanionManager: ObservableObject {
     func setUsageSharingEnabled(_ enabled: Bool) {
         usageSharingPreference.setEnabled(enabled)
         WingmanAnalytics.trackUsageSharingChanged(enabled: enabled)
+    }
+
+    func setOpenAtLoginEnabled(_ enabled: Bool) {
+        loginItemPreference.setEnabled(enabled)
     }
 
     /// The person has seen the usage sharing disclosure (Start under it, or "Got it").
@@ -602,7 +619,12 @@ final class CompanionManager: ObservableObject {
         signInStateForVocabularyCancellable = signInManager.$signInState
             .receive(on: DispatchQueue.main)
             .sink { [weak self] signInState in
-                guard case .signedIn = signInState else { return }
+                guard case .signedIn = signInState else {
+                    // Whoever signs in next files under their own name; the board rows are
+                    // looked up again rather than trusted from the last person's session.
+                    self?.appFeedbackAnchor = nil
+                    return
+                }
                 self?.refreshVocabularyFromForITSupportIfStale()
                 self?.refreshInventoryAppsFromForITSupportIfStale()
             }
@@ -737,13 +759,20 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// The system prompt for this turn: the fixed companion prompt, the vocabulary, and the
-    /// launcher's rules with the applications installed on this Mac.
+    /// The system prompt for this turn: the fixed companion prompt, the vocabulary, the
+    /// launcher's rules with the applications installed on this Mac, the inventory sites, the
+    /// feedback rules (only while the gateway exposes the board tools the feedback needs) and
+    /// the quit rule.
     private var voiceSystemPromptForThisTurn: String {
-        Self.companionVoiceResponseSystemPrompt
+        var systemPrompt = Self.companionVoiceResponseSystemPrompt
             + vocabularyStore.vocabulary.systemPromptSection()
             + WingmanLauncher.systemPromptSection(installedApplications: installedApplicationCatalog)
             + WingmanInventoryApps.systemPromptSection(apps: inventoryAppStore.apps)
+        if WingmanAppFeedback.isAvailable(exposedGatewayToolNames: gatewayExposedToolNames) {
+            systemPrompt += WingmanAppFeedback.systemPromptSection(applicationNames: inventoryAppStore.apps.map(\.name))
+        }
+        systemPrompt += WingmanQuitCommand.systemPromptSection
+        return systemPrompt
     }
 
     // MARK: - Companion Prompt
@@ -804,6 +833,8 @@ final class CompanionManager: ObservableObject {
     private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
         elevenLabsTTSClient.stopPlayback()
+        // A quit asked for in the interrupted turn is off: the person spoke again instead.
+        quitRequestedByVoice = false
 
         // The turn's usage report is built up as the pipeline runs (WingmanUsageSharing.swift).
         // It is a local of this turn, not a property, so a new question can never write into the
@@ -946,6 +977,7 @@ final class CompanionManager: ObservableObject {
                 }
 
                 shareTurnUsageIfEnabled(recorder: turnUsageRecorder, answer: answerTextForUsageReport, outcome: .answered, pointed: pointedForUsageReport)
+                terminateAfterGoodbyeIfRequested()
             } catch is CancellationError {
                 // User spoke again — response was interrupted
                 shareTurnUsageIfEnabled(recorder: turnUsageRecorder, answer: answerTextForUsageReport, outcome: .interrupted, pointed: pointedForUsageReport)
@@ -1073,6 +1105,10 @@ final class CompanionManager: ObservableObject {
                 let outcome: GatewayToolOutcome
                 if toolUse.name == WingmanLauncher.toolName {
                     outcome = await executeLauncherTool(toolUse, usageRecorder: usageRecorder)
+                } else if toolUse.name == WingmanAppFeedback.toolName {
+                    outcome = await executeAppFeedbackTool(toolUse, usageRecorder: usageRecorder)
+                } else if toolUse.name == WingmanQuitCommand.toolName {
+                    outcome = executeQuitCommand(usageRecorder: usageRecorder)
                 } else {
                     outcome = await executeGatewayTool(toolUse, spokenTranscript: transcript, usageRecorder: usageRecorder)
                 }
@@ -1156,10 +1192,17 @@ final class CompanionManager: ObservableObject {
         } else if !isCachedGatewayToolListUsable {
             await fetchGatewayToolList()
         }
-        // The launcher needs no gateway and no sign-in beyond the push-to-talk gate, so it is
-        // always offered, after the gateway tools.
-        return WingmanToolCatalog.modelToolDefinitions(exposedByGateway: gatewayExposedToolNames)
-            + [WingmanLauncher.modelToolDefinition]
+        var toolDefinitions = WingmanToolCatalog.modelToolDefinitions(exposedByGateway: gatewayExposedToolNames)
+        // Feedback is filed through three board tools of the gateway, so it is offered only
+        // while the signed-in person's tools/list has all three (decision 016).
+        if WingmanAppFeedback.isAvailable(exposedGatewayToolNames: gatewayExposedToolNames) {
+            toolDefinitions.append(WingmanAppFeedback.modelToolDefinition)
+        }
+        // The launcher and the quit command need no gateway and no sign-in beyond the
+        // push-to-talk gate, so they are always offered, after the gateway tools.
+        toolDefinitions.append(WingmanLauncher.modelToolDefinition)
+        toolDefinitions.append(WingmanQuitCommand.modelToolDefinition)
+        return toolDefinitions
     }
 
     /// Whether the cached `tools/list` belongs to the signed-in account and is young enough.
@@ -1224,6 +1267,91 @@ final class CompanionManager: ObservableObject {
             print("🚀 Launcher: \(outcome.resultText)")
         }
         return .result(text: outcome.resultText, isError: outcome.isError)
+    }
+
+    /// Files app feedback as a story under the ForIT board's "App Feedback" epic through the
+    /// gateway's board tools (decision 016). The calls use the same client and token as every
+    /// other gateway tool, and an access or transport failure is handled the way
+    /// `executeGatewayTool` handles one; everything else comes back as text the model reads.
+    private func executeAppFeedbackTool(_ toolUse: ClaudeToolUseRequest, usageRecorder: WingmanTurnUsageRecorder) async -> GatewayToolOutcome {
+        WingmanAnalytics.trackToolCalled(toolName: WingmanAppFeedback.toolName)
+        let gatewayToolClient = self.gatewayToolClient
+        do {
+            let outcome = try await WingmanAppFeedback.perform(
+                toolInput: toolUse.input,
+                signedInAccount: signInManager.signedInAccount,
+                cachedAnchor: appFeedbackAnchor,
+                filedAt: Date(),
+                callGatewayTool: { toolName, arguments in
+                    try await gatewayToolClient.callTool(named: toolName, arguments: arguments)
+                }
+            )
+            appFeedbackAnchor = outcome.anchor
+            usageRecorder.noteToolCall(name: WingmanAppFeedback.toolName, searchTerms: nil, outcome: outcome.isError ? .error : .ok)
+            if let filedStory = outcome.filedStory {
+                let storyLabel = filedStory.storyDisplayId ?? filedStory.storyId
+                WingmanAnalytics.trackAppFeedbackFiled(storyDisplayId: storyLabel)
+                print("💬 App feedback filed as story \(storyLabel)")
+            } else {
+                WingmanAnalytics.trackToolFailed(toolName: WingmanAppFeedback.toolName, outcome: outcome.analyticsOutcomeLabel)
+                print("⚠️ App feedback: \(outcome.resultText)")
+            }
+            return .result(text: outcome.resultText, isError: outcome.isError)
+        } catch let gatewayError as WingmanGatewayToolError {
+            let signedInEmail = signInManager.signedInAccount?.emailAddress ?? "this account"
+            switch gatewayError {
+            case .accessDenied(let detail):
+                usageRecorder.noteToolCall(name: WingmanAppFeedback.toolName, searchTerms: nil, outcome: .refused)
+                WingmanAnalytics.trackToolFailed(toolName: WingmanAppFeedback.toolName, outcome: "access_denied")
+                print("🛑 Gateway access denied for app feedback: \(detail)")
+                return .accessProblem(
+                    spokenReply: "I can't do that with your current access.",
+                    panelMessage: "Wingman access denied for \(signedInEmail). Ask a ForIT admin for a gateway role."
+                )
+            case .insufficientAccess(let detail):
+                usageRecorder.noteToolCall(name: WingmanAppFeedback.toolName, searchTerms: nil, outcome: .refused)
+                WingmanAnalytics.trackToolFailed(toolName: WingmanAppFeedback.toolName, outcome: "insufficient_access")
+                print("🛑 Gateway needs a higher role for app feedback: \(detail)")
+                return .accessProblem(
+                    spokenReply: "That needs team access.",
+                    panelMessage: "Filing app feedback needs the ForIT board tools on the gateway; \(signedInEmail) has less."
+                )
+            default:
+                usageRecorder.noteToolCall(name: WingmanAppFeedback.toolName, searchTerms: nil, outcome: .error)
+                WingmanAnalytics.trackToolFailed(toolName: WingmanAppFeedback.toolName, outcome: "gateway_error")
+                print("⚠️ App feedback gateway error: \(gatewayError)")
+                return .result(text: "The feedback could not be filed: \(gatewayError.localizedDescription)", isError: true)
+            }
+        } catch {
+            usageRecorder.noteToolCall(name: WingmanAppFeedback.toolName, searchTerms: nil, outcome: .error)
+            WingmanAnalytics.trackToolFailed(toolName: WingmanAppFeedback.toolName, outcome: "transport_error")
+            print("⚠️ App feedback transport error: \(error)")
+            return .result(text: "The feedback could not be filed: \(error.localizedDescription)", isError: true)
+        }
+    }
+
+    /// Marks this turn as Wingman's last (decision 017). The model reads that the app quits once
+    /// its goodbye has been spoken; `terminateAfterGoodbyeIfRequested` does the quitting after
+    /// the turn's last sentence has played.
+    private func executeQuitCommand(usageRecorder: WingmanTurnUsageRecorder) -> GatewayToolOutcome {
+        WingmanAnalytics.trackToolCalled(toolName: WingmanQuitCommand.toolName)
+        usageRecorder.noteToolCall(name: WingmanQuitCommand.toolName, searchTerms: nil, outcome: .ok)
+        quitRequestedByVoice = true
+        print("👋 Quit requested by voice; Wingman quits after the goodbye")
+        return .result(text: WingmanQuitCommand.modelResultText, isError: false)
+    }
+
+    /// Quits the app a moment after the goodbye has finished playing, unless a new turn began
+    /// in the meantime (a person who pressed the key again to say "wait" keeps Wingman). The
+    /// delay lets the turn's usage report, posted in its own task, leave first.
+    private func terminateAfterGoodbyeIfRequested() {
+        guard quitRequestedByVoice else { return }
+        WingmanAnalytics.trackQuitRequestedByVoice()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: WingmanQuitCommand.quitDelayAfterGoodbye)
+            guard let self, self.quitRequestedByVoice else { return }
+            NSApp.terminate(nil)
+        }
     }
 
     /// Scans the Applications folders off the main thread when the catalog is ten minutes old and

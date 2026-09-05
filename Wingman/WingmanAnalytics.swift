@@ -167,6 +167,18 @@ enum WingmanAnalytics {
         recordMilestone("inventory_apps_refreshed", properties: ["apps": String(appCount)])
     }
 
+    /// App feedback reached the ForIT board as a story (decision 016). The story's number is
+    /// public so `log show` can prove which story a spoken piece of feedback became; the feedback
+    /// itself is never logged.
+    static func trackAppFeedbackFiled(storyDisplayId: String) {
+        recordMilestone("app_feedback_filed", properties: ["story": storyDisplayId])
+    }
+
+    /// The person asked Wingman to quit by voice and the app is about to terminate (decision 017).
+    static func trackQuitRequestedByVoice() {
+        recordMilestone("quit_requested_by_voice", properties: [:])
+    }
+
     /// The inventory fetch failed and the stored list stays. `reason` is a stable label (a
     /// `tool_error_http_401` while the gateway's key is rejected, say), never the response.
     static func trackInventoryAppsRefreshFailed(reason: String) {
