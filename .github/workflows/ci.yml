@@ -85,7 +85,9 @@ jobs:
       # Interim signing identity (2026-09-05). macOS keys the Accessibility and Screen Recording grants
       # to the app's designated requirement. An ad-hoc signature's requirement is the build's cdhash,
       # so every release invalidated both grants on the Mac it was installed on. Signing with a
-      # certificate makes the requirement "identifier io.forit.wingman and certificate leaf = H..."
+      # certificate makes the requirement "identifier io.forit.wingman and certificate root = H..."
+      # (codesign writes "root" for a self-signed certificate, which is its own root, and "leaf"
+      # for one issued by a CA; both name the certificate, and neither changes between builds)
       # which is the same for every build signed by that certificate, so the grants survive updates.
       # The certificate is self-signed and held as two repo secrets (MACOS_SIGNING_P12_BASE64, the
       # PKCS#12; MACOS_SIGNING_P12_PASSWORD). It is not a Developer ID: Gatekeeper still treats the
@@ -162,7 +164,7 @@ jobs:
           # or every release would invalidate the grants again.
           codesign -d -r- "$APP" 2>&1 | tee build/designated-requirement.txt
           if [ "${{ steps.signing.outputs.identity }}" != "-" ]; then
-            grep -q "certificate leaf" build/designated-requirement.txt
+            grep -Eq "certificate (leaf|root)" build/designated-requirement.txt
             if grep -q "cdhash" build/designated-requirement.txt; then
               echo "Designated requirement still pins the cdhash; the grants would not survive an update."
               exit 1
