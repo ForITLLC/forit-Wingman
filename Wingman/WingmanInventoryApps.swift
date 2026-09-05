@@ -12,6 +12,7 @@
 //  inventory and writes nothing to it.
 //
 
+import Combine
 import Foundation
 
 /// One inventory app that can be opened.
