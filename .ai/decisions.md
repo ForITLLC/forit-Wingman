@@ -321,6 +321,8 @@ before. The hardened runtime stays off (library validation wants a Team ID, see 
 - Replace with a ForIT Developer ID when one exists; the same workflow step takes that PKCS#12 and the
   hardened runtime can then go back on.
 
+**Verified 2026-09-05 05:34Z.** The MacBook went from 0.1.35 to 0.1.41 (both signed with the interim certificate) and kept the Accessibility, Screen Recording and microphone grants with no re-grant: the new process logged `permission_granted` three times and `all_permissions_granted` at 22:34:52 local. One caveat found the same night: a build started by running its binary from an ssh shell has the shell as its TCC responsible process, so the microphone and screen-recording checks are denied regardless of the signature. Start it with `open -b io.forit.wingman` (LaunchServices), which is what Finder does.
+
 ## 006 — Taught vocabulary is applied on the Mac, in the app, not in the relay or the model
 
 ### Context
