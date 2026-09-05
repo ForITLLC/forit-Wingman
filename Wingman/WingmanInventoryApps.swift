@@ -3,8 +3,9 @@
 //  Wingman
 //
 //  The ForIT and client sites Wingman can open: the active apps in the ForIT Support inventory
-//  that carry a url (proposal `docs/common-proposed/for-support-inventory-app-url.md`, for-Support
-//  WO#1979). `CompanionManager` fetches the list through the gateway tool `support_listInventoryApps`
+//  that carry a url (for-Support WO#1979, live since 2026-09-05; the contract as shipped is
+//  `docs/common-proposed/for-support-inventory-app-url.md`). `CompanionManager` fetches the list
+//  through the gateway tool `support_listInventoryApps`
 //  after sign-in and hourly, never on a spoken turn's critical path and never described to the
 //  model; the panel's Apps section lists them with an Open button, and the model gets them in the
 //  system prompt so "open the XcelJet AVHR site" becomes an `open_on_this_mac` call with that url.
