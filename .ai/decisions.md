@@ -529,3 +529,56 @@ diagnosed from `log show` on Ben's Mac.
   removed by the switch. Removing a person's rows is a manual operation on the table for now.
 - The report is the timing instrumentation for the "why is the first sentence slow" question: the five
   milestones cover listening, model, speech and total, per turn, per Mac, without anyone reading `log show`.
+
+## 011 — Filing a ticket for a customer takes two spoken turns, and the person's own words are the consent
+
+Date: 2026-09-05.
+
+### Context
+
+Ben: "Wingman should also be able to put in a support ticket for a customer and you should look at for
+support and figure out how that's gonna work. Again, think like Planet Nine is potentially a support
+customer and we'd blow them in." Until now Wingman created nothing: it listed tickets, left draft notes,
+searched the knowledge base. A ticket is different in kind. for-Support's create route
+(`POST /api/admin/tickets`, reached as the gateway tool `support_createTicket`) emails the requester on
+creation, records the create under `automation@forit.io`, and is already a two-step call on the server:
+without a `confirmation_token` it returns a preview and a token (HMAC over tenant, requester and subject);
+with the token it creates, and its send rail holds the create (409 `send_rail_hold`) unless a `consent`
+string passes `sendRailConsent.ts`, whose vocabulary approves "send", "create", "go ahead", "approve",
+"proceed", "ship it", "do it", denies "no", "don't", "stop", "cancel", and holds a bare "yes" or a question.
+Two facts shaped the design: a voice assistant cannot show a dialog, so the read-back is the dialog; and the
+model must never be the thing that decides a ticket may be filed.
+
+### Decision
+
+- **Two calls, two turns.** The model calls `support_createTicket` without `confirm`; the app forwards it
+  with no token, for-Support previews, and the app keeps the preview (`WingmanPendingTicketPreview`: the
+  token and the exact arguments sent, usable for ten minutes). The model reads the preview back and asks the
+  person to say "go ahead". In a later turn the model calls again with `confirm: true`, and the app, not the
+  model, decides: what the person said this turn is judged by `WingmanSpokenConsent`, a mirror of
+  for-Support's vocabulary, so the app refuses locally exactly what the server would hold. An approval
+  resends the previewed arguments (never the model's retyping), the token, and the transcript as `consent`.
+  A no drops the preview. A bare yes files nothing and the model is told to ask for the words.
+- **The requester is never guessed.** The tenant comes from `support_listTenants` and the person from
+  `support_listInventoryUsers` (a search for one person; a directory listing is never sent). Someone not in
+  the directory means the model asks the user for the address; the app refuses anything that is not an email.
+- **Attribution in the description.** for-Support records the create under its automation identity, so the
+  app appends `Filed by <name> (<email>) with Wingman.` to the description. Every ticket says who asked.
+- **for-Support judges the words again.** The consent is sent verbatim; for-Support's rail is the second
+  gate and its hold is answered by asking the person again, never by a retry. Today the gateway (FastMCP's
+  OpenAPI director) forwards only the arguments the for-Support schema declares, and `consent` and
+  `skipAutoReply` are not declared, so a live create is held at for-Support until it ships
+  `docs/common-proposed/for-support-ticket-create-consent.md`. Wingman ships the flow now, with the hold
+  turned into a fixed instruction to the model, rather than waiting or sending `skipAutoReply` to dodge
+  the rail (the requester email is part of filing a ticket, not a side effect to suppress).
+
+### Consequences
+
+- Wingman creates one kind of thing, after a read-back, and only with words the person actually said.
+  `docs/PERMISSIONS.md` 3 has the row; the tool needs Operator (the gateway's `tools.write`).
+- Nothing about a ticket is stored on the Mac beyond the ten-minute preview in memory; the usage report
+  records the tool name and outcome as for every tool, never the ticket's content.
+- Proving it end to end needs a test tenant with a ForIT requester, because a create emails a real address
+  and a hold pages Ben; filing a real customer's ticket is Ben's call, not a test.
+- for-Support: declare `consent` (and `skipAutoReply`) in the OpenAPI body schema for the create route,
+  so the gateway forwards them. Until then every confirming call from Wingman is held, by design.
