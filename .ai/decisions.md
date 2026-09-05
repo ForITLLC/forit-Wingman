@@ -588,6 +588,16 @@ model must never be the thing that decides a ticket may be filed.
   2026-09-05 (WO#1970), so the gateway forwards them. The end-to-end spoken proof (preview, "go ahead",
   ticket number, filed-by line in the portal) needs the test tenant with a ForIT requester above.
 
+### Update 2026-09-05 (AoE-Commander, after WO#1970)
+
+The gate above ("filing a real customer's ticket is Ben's call, not a test") is **withdrawn** for the
+end-to-end proof. The ForIT tenant exists on for-Support (`F0817001-0001-0001-0001-000000000001`, slug
+`forit`) and Ben is a ForIT requester, so the spoken proof runs there: Ben asks Wingman to file a
+ticket for ForIT with himself as the requester, hears the preview, says the go-ahead, and the ticket
+is created and its email goes to him. Nothing is filed until he speaks the words in Wingman; no
+session files a ticket on his behalf, on the forit tenant or any other. Filing for a real customer
+outside that proof is unchanged: it happens only when a signed-in person asks for it by voice.
+
 ## 012 — Wingman defines no knowledge base search of its own; it consumes for-Support's and cites the article
 
 Date: 2026-09-05. Work order WO#1972 from the AoE-Commander, carrying Ben's ruling recorded in for-FL3XX
