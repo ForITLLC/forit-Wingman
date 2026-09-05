@@ -862,14 +862,20 @@ struct CompanionPanelView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(DS.Colors.textSecondary)
 
+                // The whole title, wrapped, never an ellipsis: the row exists so the person can see
+                // and open what the answer came from (Ben, 2026-09-05, when a title was cut short:
+                // "How the fuck do you not have a wraparound on your own app?").
                 Text(citedArticle.title)
                     .font(.system(size: 11, weight: .regular))
                     .foregroundColor(DS.Colors.textTertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
+                    .fixedSize(horizontal: false, vertical: true)
 
-            Spacer()
+                Text(citedArticle.url.host ?? citedArticle.url.absoluteString)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button(action: {
                 companionManager.openLastCitedKnowledgeBaseArticle()
@@ -973,11 +979,9 @@ struct CompanionPanelView: View {
                 Text(inventoryApp.url.host ?? inventoryApp.url.absoluteString)
                     .font(.system(size: 11, weight: .regular))
                     .foregroundColor(DS.Colors.textTertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button(action: {
                 NSWorkspace.shared.open(inventoryApp.url)
@@ -1075,7 +1079,7 @@ struct CompanionPanelView: View {
                 Text("said \(quotedSpokenForms)")
                     .font(.system(size: 11, weight: .regular))
                     .foregroundColor(DS.Colors.textTertiary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
