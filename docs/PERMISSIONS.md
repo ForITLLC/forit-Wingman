@@ -76,8 +76,8 @@ token). The relay forwards `tools` / `tool_use` / `tool_result` to Anthropic and
    delegated token only from an allow-listed native client; Wingman uses **ForIT-Wingman-Client** (`acc81527-1818-4c79-8f59-0bfc111701d4`)
    and requests `api://861db494…/access_as_user` (user-consentable, pre-authorised, no consent screen). The
    user's gateway app role (Reader / Writer / Admin) becomes `tools.read` / `tools.write` / `tools.admin` on the
-   token; no role = HTTP 403 `insufficient_scope`. The earlier **ForIT Wingman** registration (`36021471-d468-4f12-9c83-e5a73f957752`)
-   is not allow-listed and is no longer used by the app (left in Entra for a ForIT admin to delete). Recipe:
+   token; no role = HTTP 403 `insufficient_scope`. The earlier **ForIT Wingman** registration was never allow-listed, is not used by the app, and
+   was deleted by for-mcp on 2026-09-05 (WO#1910); nothing in the app or the relay refers to it. Recipe:
    for-mcp `docs/native-clients.md` §3.
 3. **No FL3XX tools on the gateway.** FL3XX exists only as a docs corpus (`for-FL3XX`). Flight questions run
    against the VMO-backed `forit_avops_search_flights` until FL3XX credentials exist (Ben decision).

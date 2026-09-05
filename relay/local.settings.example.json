@@ -4,7 +4,7 @@
     "AzureWebJobsStorage": "UseDevelopmentStorage=true",
     "FUNCTIONS_WORKER_RUNTIME": "node",
     "WINGMAN_ENTRA_TENANT_ID": "c0efa09e-4bda-4a9d-a177-4c77076b7f76",
-    "WINGMAN_ENTRA_CLIENT_ID": "36021471-d468-4f12-9c83-e5a73f957752",
+    "WINGMAN_ENTRA_CLIENT_ID": "acc81527-1818-4c79-8f59-0bfc111701d4",
     "WINGMAN_ALLOWED_EMAIL_DOMAINS": "forit.io",
     "WINGMAN_MODEL_PROVIDER": "anthropic",
     "WINGMAN_ALLOWED_MODELS": "claude-sonnet-5,claude-opus-5",

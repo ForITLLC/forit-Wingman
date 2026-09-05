@@ -98,8 +98,9 @@ kept here so the paragraphs above remain the decision as accepted and this is wh
 - **Function App is `forit-wingman-relay`**, not `wingman-func`, matching the `forit-<product>` naming of
   the other ForIT Function Apps. Hostname `forit-wingman-relay.azurewebsites.net`. Template:
   `relay/infra/main.bicep`; pipeline: `.github/workflows/relay-deploy.yml` (ref-gated to `main`).
-- **One Entra app registration, not two.** The public client **ForIT Wingman**
-  (`36021471-d468-4f12-9c83-e5a73f957752`, object `336b3a41-6445-4924-bd1e-7d336af47aa5`, redirect
+- **One Entra app registration, not two.** The public client **ForIT Wingman** (the original registration;
+  replaced on 2026-09-04 by **ForIT-Wingman-Client** `acc81527-1818-4c79-8f59-0bfc111701d4`, see
+  `docs/PERMISSIONS.md` 5.2, and deleted by for-mcp on 2026-09-05 under WO#1910; redirect
   `msauth.io.forit.wingman://auth`) signs the user in with PKCE. Its **id_token** (`aud` = that client id,
   RS256 against the ForIT tenant keys) is the relay credential; a separate "Wingman API" registration
   exposing `access_as_user` adds nothing the relay can check that the id_token does not already carry. The
