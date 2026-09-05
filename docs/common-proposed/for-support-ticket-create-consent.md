@@ -1,5 +1,7 @@
 # Proposal for for-Support: declare `consent` on the ticket create route so the gateway forwards it
 
+**Status: shipped by for-Support on 2026-09-05 at 20:47Z** (WO#1970, support.forit.io `772e032`, master run 33990748040; the gateway's support spec is generation 3, hash `6e673050cd748f26`, and its `tools/list` declares `consent` (string) and `skipAutoReply` (boolean) on `support_createTicket`; for-Support's proof FI-000236 was a gateway create with `skipAutoReply: true` and no outbound email). Kept as the record of the contract Wingman sends against.
+
 Written from for-Wingman on 2026-09-05 (decision 011). Cross-project writes are not made from here; this is
 the ask, with the evidence, for the for-Support session to apply.
 
