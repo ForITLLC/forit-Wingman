@@ -84,8 +84,12 @@ class ClaudeAPI {
     /// Every relay call carries the signed-in user's id_token. Asking the provider here (rather
     /// than caching a token) means a refresh happens transparently when one is due.
     private func makeAuthorizedRequest() async throws -> URLRequest {
+        try await makeAuthorizedRequest(url: relayChatURL)
+    }
+
+    private func makeAuthorizedRequest(url: URL) async throws -> URLRequest {
         let bearerToken = try await bearerTokenProvider()
-        var request = URLRequest(url: relayChatURL)
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 120
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -169,6 +173,41 @@ class ClaudeAPI {
         session.dataTask(with: warmUpRequest) { _, _, _ in
             // The response does not matter; a running worker is the goal.
         }.resume()
+    }
+
+    /// Sends one turn's usage report (usage sharing, .ai/decisions.md 010) and returns whether the
+    /// relay kept it: false means the relay has recording switched off. The caller only logs a
+    /// failure; a report is never retried and never delays the next question.
+    func sendUsageReport(_ report: WingmanUsageReport, to relayUsageURL: URL) async throws -> Bool {
+        var request = try await makeAuthorizedRequest(url: relayUsageURL)
+        request.timeoutInterval = 30
+        request.httpBody = try JSONEncoder().encode(report)
+
+        let (responseData, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw WingmanRelayError.invalidResponse
+        }
+        let responseBody = String(data: responseData, encoding: .utf8) ?? ""
+        switch httpResponse.statusCode {
+        case 200...299:
+            return Self.usageReportWasStored(inResponseBody: responseData)
+        case 401:
+            throw WingmanRelayError.notAuthorized(message: WingmanRelayError.message(fromRelayBody: responseBody))
+        default:
+            throw WingmanRelayError.relayRejected(
+                statusCode: httpResponse.statusCode,
+                message: WingmanRelayError.message(fromRelayBody: responseBody)
+            )
+        }
+    }
+
+    /// The relay answers `{"stored":true}` when it kept the report and `{"stored":false,"reason":…}`
+    /// when recording is off. Anything else counts as not stored.
+    static func usageReportWasStored(inResponseBody responseData: Data) -> Bool {
+        guard let responseObject = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
+            return false
+        }
+        return responseObject["stored"] as? Bool ?? false
     }
 
     /// The content blocks of a user turn: each screenshot followed by its label, then the spoken

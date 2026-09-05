@@ -30,6 +30,13 @@ enum WingmanAnalytics {
         logger.error("event=\(eventName, privacy: .public) \(propertySummary, privacy: .public)")
     }
 
+    /// A few events are worth keeping without being failures (a usage report leaving the Mac, a
+    /// preference changing hands). Notice level is persisted by the unified log, debug is not.
+    private static func recordMilestone(_ eventName: String, properties: [String: String] = [:]) {
+        let propertySummary = properties.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+        logger.notice("event=\(eventName, privacy: .public) \(propertySummary, privacy: .public)")
+    }
+
     // MARK: - Setup
 
     static func configure() {
@@ -122,6 +129,23 @@ enum WingmanAnalytics {
     /// The gateway refused or failed a tool call; `outcome` is a stable label, never the payload.
     static func trackToolFailed(toolName: String, outcome: String) {
         recordProblem("tool_failed", properties: ["tool": toolName, "outcome": outcome])
+    }
+
+    // MARK: - Usage sharing
+
+    /// One turn's usage report reached the relay; `stored` is what the relay said it did with it.
+    static func trackUsageReportSent(stored: Bool) {
+        recordMilestone("usage_report_sent", properties: ["stored": String(stored)])
+    }
+
+    /// The report could not be delivered. It is dropped, never retried.
+    static func trackUsageReportFailed(error: String) {
+        recordProblem("usage_report_failed", properties: ["error": error])
+    }
+
+    /// The person flipped the "Share usage with ForIT" switch in the panel.
+    static func trackUsageSharingChanged(enabled: Bool) {
+        recordMilestone("usage_sharing_changed", properties: ["enabled": String(enabled)])
     }
 
     // MARK: - Sign-in

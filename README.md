@@ -12,7 +12,7 @@ Wingman is derived from [Clicky](https://github.com/farzaa/clicky) by Farza (MIT
 | Clicky | Wingman |
 |--------|---------|
 | Cloudflare Worker holding Anthropic, ElevenLabs and AssemblyAI keys, no caller auth | ForIT relay in the ForIT Azure subscription, Entra sign-in per user, keys only in Key Vault |
-| PostHog analytics, FormSpark email capture, hosted intro video, "DM Farza" | none of that; nothing leaves the machine except model calls and tool calls |
+| PostHog analytics, FormSpark email capture, hosted intro video, "DM Farza" | none of that; nothing leaves the machine except model calls, tool calls and, unless the person switches it off in the panel, one usage report per question (question, answer, tools, timings; never the screen or the voice) |
 | AssemblyAI streaming speech-to-text | on-device Apple Speech |
 | General "AI teacher" | support assistant that calls the for-mcp gateway as the signed-in ForIT user |
 

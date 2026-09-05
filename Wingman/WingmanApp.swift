@@ -44,9 +44,12 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()
-        // Auto-open the panel if the user still needs to do something:
-        // either they haven't onboarded yet, or permissions were revoked.
-        if !companionManager.hasCompletedOnboarding || !companionManager.allPermissionsGranted {
+        // Auto-open the panel if the user still needs to do something: they haven't onboarded
+        // yet, permissions were revoked, or they have not yet seen the usage sharing notice
+        // (a Mac that onboarded before usage sharing existed sees it once, with a "Got it").
+        if !companionManager.hasCompletedOnboarding
+            || !companionManager.allPermissionsGranted
+            || !companionManager.usageSharingPreference.hasAcknowledgedNotice {
             menuBarPanelManager?.showPanelOnLaunch()
         }
         registerAsLoginItemIfNeeded()

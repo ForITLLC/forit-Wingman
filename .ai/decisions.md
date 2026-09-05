@@ -474,3 +474,58 @@ search rank the `kb-*` and `appui-*` how-tos above the `web-*` marketing, press 
 - Decision 003's "never invent" softens to "never pass off": general knowledge is allowed when labelled.
 - Dropping "Flex" and "FL3XX" from the query means a ForIT how-to that never mentions the product is no
   longer hidden behind its name.
+
+## 010 — Usage sharing is on by default, disclosed before the first question, and the relay keeps one row per turn
+
+Date: 2026-09-05. Amends 001's "the relay stores nothing".
+
+### Context
+
+Ben, 2026-09-05, when asked whether ForIT should keep what people ask Wingman: "with something like this,
+I think we should opt in, but we should basically just also put a message of, hey, on the onboarding that
+ForIT uses this to help determine something along the telemetry, make people-- and give them the option to
+opt out." Until now nothing about a turn left the Mac except the model call and the tool calls, and the only
+record was the Mac's own unified log (decision 001, 004). That made "which questions does Wingman fail on",
+"how slow is a turn", "what do people search the knowledge base for" unanswerable without sitting next to
+someone. The same day's timing complaints (the first sentence took several seconds to be spoken) had to be
+diagnosed from `log show` on Ben's Mac.
+
+### Decision
+
+- **On by default, with a disclosure the person sees before their first question.** The panel shows a
+  usage sharing notice (`WingmanUsageSharingNotice`) above the Start button: what ForIT keeps, what it never
+  keeps, and a switch. Pressing Start counts as having read it. A Mac that onboarded before this build sees
+  the same notice once, with a "Got it" button, and the panel opens on its own at launch until it is seen.
+  The switch stays in the panel, next to the model picker, as "Share usage with ForIT". The preference is
+  `sharesUsageWithForIT` in UserDefaults (missing = on).
+- **One report per spoken turn** (`WingmanUsageReport`, `WingmanTurnUsageRecorder`): the question as the
+  model saw it (after the vocabulary rewrite), the spoken answer, the model, the app version, which tools
+  ran with their outcome (and, for a knowledge base search, the keywords that went to for-Support), how
+  many model rounds the turn took, whether the cursor pointed, whether the turn was answered, failed or
+  interrupted, and five timings measured from the moment the transcript was final: how long the key was
+  held, first model text, first spoken audio, answer complete, turn finished. **Never** the screenshot, the
+  audio, a tool result, or a conversation history. The report is sent after the turn ends, in its own task,
+  and is dropped on failure: it never delays or retries.
+- **The relay keeps it** (`POST /api/usage`, `relay/src/usage.ts`) as one row in an Azure Table
+  (`wingmanusage`) in the relay's own storage account, attributed to the person from the verified token,
+  never from the body. The route validates and bounds every field and drops anything else, so the relay
+  cannot be made to store a screenshot by an older or modified app. No new secret and no new SDK: the table
+  is declared in `relay/infra/main.bicep` and written over the Table REST API with the host storage
+  account's key (`AzureWebJobsStorage`), Shared Key Lite from `node:crypto`. `WINGMAN_USAGE_RECORDING=off`
+  is the server-side switch for the whole fleet; the app then gets `{stored:false}` and logs it.
+- **The Mac log says what left**: `usage_report_sent stored=true|false` and `usage_report_failed` are
+  notice/error-level lines with public fields under `subsystem == "io.forit.wingman"`.
+
+### Consequences
+
+- 001's "the relay stores nothing" becomes "the relay stores nothing but the usage rows people have not
+  opted out of". The other guarantees hold: no screenshot, no audio, no tool result, no vendor key outside
+  Key Vault.
+- The rows are personal data about ForIT staff (who asked what, when). They live in the ForIT subscription
+  behind the storage account key, which the relay's identity and subscription owners hold. **Retention is
+  a Ben decision, not made here**: rows are kept until deleted. A lifecycle rule or a purge job is a
+  one-line follow-up once he names a period.
+- A person who switches sharing off is invisible to the table from that turn on; nothing already stored is
+  removed by the switch. Removing a person's rows is a manual operation on the table for now.
+- The report is the timing instrumentation for the "why is the first sentence slow" question: the five
+  milestones cover listening, model, speech and total, per turn, per Mac, without anyone reading `log show`.

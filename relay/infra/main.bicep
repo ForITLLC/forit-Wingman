@@ -49,6 +49,12 @@ param elevenLabsVoiceId string = ''
 @description('Git commit sha of the code being deployed; /api/health reports it.')
 param relayVersion string
 
+@description('Usage sharing (.ai/decisions.md 010): "on" keeps the per-turn report the app sends to /api/usage; "off" acknowledges and stores nothing.')
+param usageRecording string = 'on'
+
+@description('Table in the storage account that holds one row per shared turn.')
+param usageTableName string = 'wingmanusage'
+
 var tags = {
   product: 'wingman'
   component: 'relay'
@@ -79,6 +85,18 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     allowBlobPublicAccess: false
     allowSharedKeyAccess: true // the Functions host on a consumption plan still needs the key-based AzureWebJobsStorage
   }
+}
+
+// The usage table lives in the Functions host's own account: the relay writes to it with the same
+// connection string the host already holds (AzureWebJobsStorage), so no new secret or role exists.
+resource storageTableService 'Microsoft.Storage/storageAccounts/tableServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource usageTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: storageTableService
+  name: usageTableName
 }
 
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -155,6 +173,8 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'WINGMAN_DEFAULT_MODEL', value: defaultModel }
         { name: 'ELEVENLABS_VOICE_ID', value: elevenLabsVoiceId }
         { name: 'RELAY_VERSION', value: relayVersion }
+        { name: 'WINGMAN_USAGE_RECORDING', value: usageRecording }
+        { name: 'WINGMAN_USAGE_TABLE', value: usageTableName }
         // Secrets: Key Vault references, resolved by the managed identity below. Never the value.
         { name: 'ANTHROPIC_API_KEY', value: '@Microsoft.KeyVault(SecretUri=https://${keyVaultName}${environment().suffixes.keyvaultDns}/secrets/anthropic-api-key/)' }
         { name: 'ELEVENLABS_API_KEY', value: '@Microsoft.KeyVault(SecretUri=https://${keyVaultName}${environment().suffixes.keyvaultDns}/secrets/elevenlabs-api-key/)' }

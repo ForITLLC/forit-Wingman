@@ -23,6 +23,14 @@ export interface RelayConfig {
   elevenLabsVoiceId: string | undefined;
   /** Git sha baked in at deploy time; /api/health reports it so the pipeline can prove what is live. */
   relayVersion: string;
+  /**
+   * Usage sharing (.ai/decisions.md 010): /api/usage keeps one row per spoken turn the app reports.
+   * On unless WINGMAN_USAGE_RECORDING is "off"; the server-side kill switch for the whole fleet.
+   */
+  usageRecordingEnabled: boolean;
+  /** Where the rows go: WINGMAN_USAGE_STORAGE_CONNECTION_STRING, else the Functions host account. */
+  usageStorageConnectionString: string | undefined;
+  usageTableName: string;
 }
 
 const FORIT_TENANT_ID = "c0efa09e-4bda-4a9d-a177-4c77076b7f76";
@@ -33,6 +41,11 @@ function splitCommaSeparatedList(rawValue: string | undefined, fallback: string[
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function isSwitchedOff(rawValue: string | undefined): boolean {
+  const normalised = rawValue?.trim().toLowerCase();
+  return normalised === "off" || normalised === "false" || normalised === "0" || normalised === "no";
 }
 
 function emptyToUndefined(rawValue: string | undefined): string | undefined {
@@ -62,6 +75,10 @@ export function loadRelayConfig(environment: NodeJS.ProcessEnv = process.env): R
     elevenLabsApiKey: emptyToUndefined(environment.ELEVENLABS_API_KEY),
     elevenLabsVoiceId: emptyToUndefined(environment.ELEVENLABS_VOICE_ID),
     relayVersion: environment.RELAY_VERSION?.trim() || "unknown",
+    usageRecordingEnabled: !isSwitchedOff(environment.WINGMAN_USAGE_RECORDING),
+    usageStorageConnectionString:
+      emptyToUndefined(environment.WINGMAN_USAGE_STORAGE_CONNECTION_STRING) ?? emptyToUndefined(environment.AzureWebJobsStorage),
+    usageTableName: environment.WINGMAN_USAGE_TABLE?.trim() || "wingmanusage",
   };
 }
 

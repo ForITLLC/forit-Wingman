@@ -20,6 +20,7 @@ async function healthHandler(_request: HttpRequest, _context: InvocationContext)
     allowedModels: config.allowedModels,
     chatConfigured: Boolean(config.anthropicApiKey),
     ttsConfigured: Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId),
+    usageRecording: config.usageRecordingEnabled && Boolean(config.usageStorageConnectionString),
     entraTenantId: config.entraTenantId,
     entraClientId: config.entraClientId,
     allowedEmailDomains: config.allowedEmailDomains,

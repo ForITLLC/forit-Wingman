@@ -106,3 +106,24 @@ token). The relay forwards `tools` / `tool_use` / `tool_result` to Anthropic and
    the routes with the shared `SUPPORT_API_KEY` bearer only, which is the path the gateway uses today (gap 1),
    so per-user scoping of KB reads arrives with WO#1908 like every other `support_*` call. Owner: for-Support
    (import + internal visibility), for-mcp (WO#1908).
+
+## 6. Usage sharing (decision 010)
+
+What leaves the Mac besides the model call and the tool calls: **one usage report per spoken turn**, sent
+to the relay's `POST /api/usage` with the same id_token as `/api/chat`, unless the person has switched
+"Share usage with ForIT" off in the panel. It is on by default and the panel discloses it before the first
+question (above the Start button; a Mac that onboarded earlier sees it once with "Got it").
+
+| In the report | Never in the report |
+|---------------|---------------------|
+| the question (after the vocabulary rewrite), the spoken answer, the model, the app version | the screenshot |
+| each tool call: name, outcome (`ok` / `error` / `refused`) and, for a knowledge base search, the keywords sent | the audio, the transcript's partial results |
+| model rounds, whether the cursor pointed, whether the turn was answered / failed / interrupted | any tool result (ticket bodies, article text, flight data) |
+| five timings from the final transcript: listening, first model text, first speech, answer complete, total | the conversation history, the gateway token |
+
+The relay attributes the row to the person from the verified token (email, display name, object id),
+never from the body, bounds every field and drops anything it does not know, and keeps it in the Azure
+Table `wingmanusage` of its own storage account. `WINGMAN_USAGE_RECORDING=off` on the relay stops the
+storing fleet-wide; the app is told `{stored:false}` and logs it. A turn that ended for want of a sign-in
+sends nothing. Retention: rows are kept until deleted (Ben decision pending); the switch stops future
+rows and does not remove stored ones.
