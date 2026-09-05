@@ -52,7 +52,7 @@ jobs:
             DEVELOPMENT_TEAM= \
             MARKETING_VERSION="$APP_VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            | tee build/test.log | grep -E "^(Test|Executed|\*\*|error:|warning: .*error)" || true
+            | tee build/test.log | grep -E "^(Test|Executed|\*\*)|error:" || true
           grep -q "\*\* TEST SUCCEEDED \*\*" build/test.log
 
       - name: Upload test log
