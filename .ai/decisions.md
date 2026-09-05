@@ -676,3 +676,57 @@ own token (decisions 003 and 012), so the list belongs there too.
   relay change.
 - for-Support's side is a proposal until the for-Support session ships it; Wingman's behaviour with the
   route absent is the same as before this decision, minus the editor.
+
+## 014 — The refresh token's keychain item is readable by any application of this user, so no launch ever prompts
+
+**Date:** 2026-09-05
+**Status:** Accepted
+
+### Context
+
+Ben, 2026-09-05: "every fucking time I come back, there's like a million unlock my keychain
+requests, even though I click like always allow, which is pretty fucking annoying."
+
+The refresh token lives in one generic-password item in the login keychain. macOS grants an
+application silent access to such an item by the code signature on the item's access list;
+any other signature gets the "Wingman wants to use your confidential information stored in
+'Wingman' in your keychain" dialog. The Release build is signed with the interim self-signed
+certificate of decision 005, which securityd does not treat as a stable identity: its
+`kcacl` log lines on Ben's Mac show a prompt on every launch, and "Always Allow" did not carry
+to the next launch even of the same build. Each Sparkle update, and each relaunch this
+session forced to prove an update had installed, added one more dialog. The dialogs also
+piled up because `restoreSessionIfPossible` read the item on the main actor at launch, so a
+dialog nobody had answered yet held the panel and the Sparkle start behind it.
+
+### Decision
+
+- `WingmanKeychainStore.save` creates the item with an access list that names no trusted
+  application (`SecAccessCreate` with a nil trusted list, set as `kSecAttrAccess`). Every
+  application running as this user may read the item without a dialog; no build of Wingman
+  ever prompts for it again. If the framework refuses to create the list, the default list
+  (this build only) is used and the print line says so.
+- The launch read runs off the main thread (`Task.detached` in `restoreSessionIfPossible`),
+  so a dialog an older build's item still raises never blocks the panel, the push-to-talk gate
+  or the updater.
+- A Mac with an item from before this change sees the dialog one last time, on the first
+  launch of a build with this decision; the next sign-in or token refresh rewrites the item
+  with the open list. Nothing is migrated at launch, because reading the old item is the
+  prompt.
+- Sessions stop force-relaunching a person's Wingman to prove an update: the hourly Sparkle
+  check and the next quit install it, and a relaunch nobody asked for is a prompt nobody asked
+  for.
+
+### Consequences
+
+- The refresh token is no longer bound to Wingman's signature. Any process running as the
+  signed-in user can read it without a dialog, the same posture as a token file readable only
+  by that user in their own Library. The keychain is still encrypted at rest and locked with
+  the login keychain, and the token is a refresh token for the Wingman app registration only:
+  it mints id_tokens the relay accepts and gateway tokens scoped `access_as_user`, both under
+  the person's own Entra account and Conditional Access.
+- The right end state is the data protection keychain (`kSecUseDataProtectionKeychain`),
+  which prompts never and keys access to the app's Team ID and keychain access group. That
+  needs a ForIT Developer ID (decision 005 says why the interim certificate has no Team ID);
+  when it lands, this decision is superseded by a one-line change to the store.
+- Every ForIT Mac on the Jamf package gets this with the next release through Sparkle; a Mac
+  that had never signed in has no old item and sees no dialog at all.

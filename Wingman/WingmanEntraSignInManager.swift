@@ -139,7 +139,14 @@ final class WingmanEntraSignInManager: NSObject, ObservableObject {
     /// leaves the user signed out; a revoked or expired refresh token is also removed.
     func restoreSessionIfPossible() async {
         guard currentTokenSet == nil else { return }
-        guard let storedRefreshToken = refreshTokenKeychainStore.read() else {
+        // Off the main thread: a keychain read can show a dialog and block until it is answered
+        // (any item an older build created, before the open access list of decision 014). The
+        // panel, the updater and everything else must keep running while that dialog waits.
+        let keychainStore = refreshTokenKeychainStore
+        let storedRefreshToken = await Task.detached(priority: .userInitiated) {
+            keychainStore.read()
+        }.value
+        guard let storedRefreshToken else {
             signInState = .signedOut
             return
         }
