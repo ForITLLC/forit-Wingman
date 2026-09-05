@@ -37,7 +37,7 @@ Role assignment is an Entra enterprise-app assignment, done by a ForIT admin, ne
 | "Summarise ticket `<n>` and what is blocking it" | `support_listTickets` (by id) | Viewer | none |
 | "Draft a reply to ticket `<n>`" | `support_addTicketNote` | Operator | Writes an **internal note prefixed `DRAFT (Wingman):`** on the ticket. Never `support_replyToTicket`, never an email. |
 | "What is the status of flight `<id>`?" | `forit_avops_search_flights` | Viewer | none |
-| "How do I `<do something>` in FL3XX?" (or any supported system) | `support_searchKbArticles`, then `support_getKbArticle` | Viewer | none. Searches the `forit` tenant's published articles unless the user names a client; the app fixes the default tenant, the model cannot widen it. |
+| "How do I `<do something>` in FL3XX?" (or any supported system) | `support_searchKbArticles`, then `support_getKbArticle` | Viewer | none. Searches the `forit` tenant's published articles (including the staff-only FL3XX mirror, `visibility: internal`) unless the user names a client; the app fixes the default tenant, the model cannot widen it. |
 | Anything that sends, deletes, assigns, bulk-updates, or provisions | `support_replyToTicket`, `support_deleteTicket`, `support_assignTicket`, `support_bulkUpdateTickets`, `support_provisioning*` | **not exposed** | Wingman does not register these tools with the model at all. |
 
 The tool allow-list is a static array in the app (`WingmanToolCatalog.swift`); a tool not on it is
@@ -97,12 +97,12 @@ token). The relay forwards `tools` / `tool_use` / `tool_result` to Anthropic and
    `support_getKbArticle`, so Wingman describes both to the model. Verified from for-Wingman on 2026-09-05
    through the gateway itself: a search on tenant `forit` answers `{tenant, total, articles}`, an unknown
    tenant is `404`, an article read carries `tenant_slug` and `url`, an unknown id is `404`. The contract as
-   shipped is `docs/common-proposed/for-support-kb-read-api.md`. Still open: (a) the `forit` tenant holds
-   **no FL3XX articles**, so the model correctly says the knowledge base has nothing on that yet; seeding it
-   from the `for-FL3XX` mirror (curated set, for-FL3XX `46244dc`) was decided GO by Ben on 2026-09-05 with one
-   hard constraint, verbatim "nothing should be public": the import is staff-only, never rendered on the public
-   KB of any host, and the read routes must return those internal articles; routed to for-Support through the
-   Commander, not yet imported; (b) for-Support proved
+   shipped is `docs/common-proposed/for-support-kb-read-api.md`. (a) **Content: closed 2026-09-05.** The `forit`
+   tenant now holds the 346-page FL3XX mirror (curated set, for-FL3XX `46244dc`; import for-Support `f38e469`),
+   decided GO by Ben on 2026-09-05 with one hard constraint, verbatim "nothing should be public": every article
+   is `visibility: internal`, its `url` is the admin page, the public KB shows none of them (anonymous requests
+   are sent to sign-in), and the gateway search returns them to a bearer caller (re-verified from for-Wingman:
+   `q=tsa` → 10, `q=fl3xx` → 346, article read carries `visibility: internal`). Still open: (b) for-Support proved
    the routes with the shared `SUPPORT_API_KEY` bearer only, which is the path the gateway uses today (gap 1),
    so per-user scoping of KB reads arrives with WO#1908 like every other `support_*` call. Owner: for-Support
    (import + internal visibility), for-mcp (WO#1908).
