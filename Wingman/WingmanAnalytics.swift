@@ -167,6 +167,12 @@ enum WingmanAnalytics {
         recordMilestone("inventory_apps_refreshed", properties: ["apps": String(appCount)])
     }
 
+    /// A background update check failed on the network and Sparkle will be asked again after
+    /// this many seconds (decision 019), so the log shows why a Mac was late to an update.
+    static func trackUpdateCheckRetryScheduled(delaySeconds: Int) {
+        recordMilestone("update_check_retry_scheduled", properties: ["delay_s": String(delaySeconds)])
+    }
+
     /// App feedback reached the ForIT board as a story (decision 016). The story's number is
     /// public so `log show` can prove which story a spoken piece of feedback became; the feedback
     /// itself is never logged.
