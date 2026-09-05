@@ -125,7 +125,7 @@ return nothing FL3XX. Without articles the tools work and the model correctly sa
 has nothing on that yet".
 
 Proposed seed, **Ben decision, not pre-cleared**: the `for-FL3XX` repo (session 39b72bf0d2b7432a,
-`~/GitProjects/for-FL3XX`) holds `kb/fl3xx-knowledge-base/markdown/` — 443 markdown pages mirrored from
+`~/GitProjects/for-FL3XX`) holds `kb/fl3xx-knowledge-base/markdown/` — 442 markdown pages mirrored from
 `https://www.fl3xx.com/kb/…`, each starting with an H1 and a `Source:` line — and
 `kb/fl3xx-developer-portal/` (315 pages from `developer.fl3xx.com`). A one-off importer (for-Support side,
 `POST /api/admin/kb` with the `CRON_SECRET` bearer, the path `kbDraftFromTicket.ts` already uses) would
@@ -133,17 +133,22 @@ create one article per help-centre page in tenant `forit`, category `FL3XX`, `ta
 the H1, slug from the file name, `content` the markdown, `content_plain` rendered from it, `summary` the
 first paragraph, and the `Source:` URL kept at the top of the body.
 
-Two things only Ben can decide, so they are flagged rather than done:
+**The import set is curated (for-FL3XX commit `46244dc`, 2026-09-05).** `docs/for-support-kb-import-set.txt`
+in that repo lists 346 slugs, one per line; each maps to `kb/fl3xx-knowledge-base/markdown/<slug>.md` and
+to `https://www.fl3xx.com/kb/<slug>`. `docs/for-support-kb-import-set.md` beside it records the criteria,
+the exclusions and the regeneration command. Excluded from the 442: 88 product-update pages, 7 mobile
+release-note pages, 1 marketing page (`private-cloud-solutions-at-fl3xx`) and 1 crawl artifact
+(`kb-search-results`, the KB's own search page; never import it). A few borderline pages (`fl3xx-source`,
+the privacy policy, video tutorials, service-description pages) are kept but flagged there so the set can be
+tightened in one edit. The importer reads that file; it does not decide page by page.
 
-1. **The text is FL3XX's.** Keeping an internal, staff-facing mirror that answers ForIT's own support
-   staff and links back to the FL3XX source is the normal reseller / support-partner practice; publishing
-   it on `support.forit.io` as ForIT articles visible to clients is not. Recommendation: import with the
-   most restrictive `visibility` for-Support offers (staff-only), keep the source link, and let ForIT-written
-   articles (ForIT's own FL3XX procedures for Planet Nine, gotchas, workarounds) be the ones that go public.
-2. **Which pages.** The mirror includes FL3XX release notes and marketing pages ("Private cloud solutions
-   at FL3XX", "Product update 5-11 September 2024"). Suggest importing only the how-to / reference pages
-   (a title starting with "How to", or living under a KB category) and skipping product updates and
-   press-style pages, so search results are procedures, not news.
+One thing only Ben can decide, so it is flagged rather than done: **the text is FL3XX's.** Keeping an
+internal, staff-facing mirror that answers ForIT's own support staff and links back to the FL3XX source is
+the normal reseller / support-partner practice; publishing it on `support.forit.io` as ForIT articles visible
+to clients is not. Recommendation: import with the most restrictive `visibility` for-Support offers
+(staff-only), keep the source link, and let ForIT-written articles (ForIT's own FL3XX procedures for Planet
+Nine, gotchas, workarounds) be the ones that go public. No import has been performed and nothing has been
+written to for-Support; the set is ready for the day Ben says yes.
 
 ## Verification once shipped
 

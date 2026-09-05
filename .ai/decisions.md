@@ -183,8 +183,9 @@ Planet Nine Private Air is the first FL3XX operator) must get the ForIT-curated 
 recollection of FL3XX. The knowledge base already lives in for-Support (`kb_articles`, per tenant plus
 global articles, published/draft, `content` + `content_plain`), but it has no read route a bearer token can
 call, the gateway has no `support_*` KB tool, and the `forit` tenant holds no FL3XX article yet. The
-`for-FL3XX` repo holds a 443-page markdown mirror of FL3XX's public help centre and a 315-page mirror of its
-developer portal. Ben scoped the first cut: "let's scope to forit for now but we'd basically put this
+`for-FL3XX` repo holds a 442-page markdown mirror of FL3XX's public help centre and a 315-page mirror of its
+developer portal; a curated 346-page import set (for-FL3XX `46244dc`, `docs/for-support-kb-import-set.txt`)
+leaves out release notes, marketing and crawl artifacts. Ben scoped the first cut: "let's scope to forit for now but we'd basically put this
 planet 9 scoped".
 
 ### Options considered
