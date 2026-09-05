@@ -126,7 +126,7 @@ enum WingmanToolCatalog {
                     "limit": ["type": "integer", "description": "Results per page, 1 to \(maximumTicketsPerList). Default \(defaultTicketsPerList)."],
                     "page": ["type": "integer", "description": "Page number, default 1."],
                 ],
-                "required": [String](),
+                "required": [],
             ],
             minimumAccessLevel: .viewer
         ),
@@ -156,7 +156,7 @@ enum WingmanToolCatalog {
                     "hours_back": ["type": "number", "description": "Window start, hours before now. Default 6, max 336."],
                     "hours_ahead": ["type": "number", "description": "Window end, hours after now. Default 24, max 336."],
                 ],
-                "required": [String](),
+                "required": [],
             ],
             minimumAccessLevel: .viewer
         ),
@@ -192,7 +192,7 @@ enum WingmanToolCatalog {
             inputSchema: [
                 "type": "object",
                 "properties": [String: Any](),
-                "required": [String](),
+                "required": [],
             ],
             minimumAccessLevel: .viewer
         ),
