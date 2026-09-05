@@ -17,9 +17,9 @@ struct WingmanToolUseTests {
 
     // MARK: - Allow-list
 
-    @Test func onlyTheFiveSupportToolsAreDescribedToTheModel() {
+    @Test func onlyTheEightSupportToolsAreDescribedToTheModel() {
         let describedToolNames = WingmanToolCatalog.modelToolDefinitions.compactMap { $0["name"] as? String }
-        #expect(describedToolNames == ["support_listTickets", "support_addTicketNote", "forit_avops_search_flights", "support_searchKbArticles", "support_getKbArticle"])
+        #expect(describedToolNames == ["support_listTickets", "support_addTicketNote", "forit_avops_search_flights", "support_searchKbArticles", "support_getKbArticle", "support_listTenants", "support_listInventoryUsers", "support_createTicket"])
 
         let forbiddenToolNames = ["support_replyToTicket", "support_deleteTicket", "support_assignTicket", "support_bulkUpdateTickets", "support_provisioningSyncUser"]
         for forbiddenToolName in forbiddenToolNames {

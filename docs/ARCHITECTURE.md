@@ -29,6 +29,7 @@ root, `.ai/decisions.md`.
                                    for-mcp gateway (Container App, MCP Streamable HTTP)
                                     support_listTickets · support_addTicketNote · forit_avops_search_flights
                                     support_searchKbArticles · support_getKbArticle (live since for-Support a24e57f, 2026-09-05)
+                                    support_listTenants · support_listInventoryUsers · support_createTicket (preview, then confirm with the spoken go-ahead)
                                     role check + audit under the signed-in person; tools/list narrows the catalog
 ```
 
@@ -48,11 +49,13 @@ root, `.ai/decisions.md`.
 2. **Capture.** Apple Speech transcribes on-device while the key is held; on release ScreenCaptureKit
    takes a JPEG of every display, labelled with its pixel size and which one holds the cursor.
 3. **Model turn.** `ClaudeAPI.streamTurn` POSTs the conversation to the relay's `/api/chat` with the
-   allow-listed tool definitions (five in the catalog, narrowed to what the gateway's `tools/list` exposes). The relay checks the id_token (issuer, audience, signature,
+   allow-listed tool definitions (eight in the catalog, narrowed to what the gateway's `tools/list` exposes). The relay checks the id_token (issuer, audience, signature,
    `@forit.io`), pins the model to its allow-list, adds the Anthropic key and streams the SSE back.
 4. **Tool loop** (`CompanionManager.runModelTurnWithGatewayTools`). If the model stops with `tool_use`,
    the app runs each call through `WingmanToolCatalog.prepareCall` (allow-list, argument policy, the
-   `DRAFT (Wingman): ` prefix) and `WingmanGatewayToolClient.callTool` (MCP `tools/call` with the user's
+   `DRAFT (Wingman): ` prefix, and for `support_createTicket` the two-call gate: a preview without a
+   token first, then a confirming call that goes out only with the preview the app held and a go-ahead in
+   this turn's transcript) and `WingmanGatewayToolClient.callTool` (MCP `tools/call` with the user's
    gateway token). Results go back as `tool_result` blocks and the model is called again; four rounds at
    most, then one forced answer. A gateway 401 or 403 ends the turn with a fixed spoken refusal instead.
 5. **Speak and point.** The final text is split into the spoken part and the `[POINT:…]` tag. Speech

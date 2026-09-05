@@ -43,6 +43,11 @@ struct WingmanToolDescriptor {
 enum WingmanToolRefusal: Error, Equatable {
     case notOnAllowList(toolName: String)
     case invalidArguments(toolName: String, reason: String)
+    /// The model asked to file a previewed ticket, but the person has not said the words that count
+    /// as a go-ahead, or there is no preview to file. The reason tells the model what to do next.
+    case ticketFilingNotConfirmed(reason: String)
+    /// The person answered the read-back with a no. The app drops the preview.
+    case ticketFilingDeclined
 
     var modelFacingMessage: String {
         switch self {
@@ -50,6 +55,10 @@ enum WingmanToolRefusal: Error, Equatable {
             return "\(toolName) is not something Wingman can do."
         case .invalidArguments(let toolName, let reason):
             return "\(toolName) was not called: \(reason)"
+        case .ticketFilingNotConfirmed(let reason):
+            return "The ticket was not filed: \(reason)"
+        case .ticketFilingDeclined:
+            return "The ticket was not filed: what the user said reads as a no, so the preview is discarded. Ask what to change, or leave it."
         }
     }
 }
@@ -73,6 +82,19 @@ enum WingmanToolCatalog {
     static let searchFlightsToolName = "forit_avops_search_flights"
     static let searchKnowledgeBaseToolName = "support_searchKbArticles"
     static let readKnowledgeBaseArticleToolName = "support_getKbArticle"
+    static let listTenantsToolName = "support_listTenants"
+    static let findTenantPersonToolName = "support_listInventoryUsers"
+    static let createTicketToolName = "support_createTicket"
+
+    /// A spoken subject is a phrase, not an essay; for-Support shows it on one line.
+    static let maximumTicketSubjectCharacters = 200
+    static let maximumTicketDescriptionCharacters = 4_000
+    /// The person's own words go to for-Support as the consent its send rail judges. A turn's
+    /// transcript is short; this only stops a runaway one.
+    static let maximumSpokenConsentCharacters = 500
+    static let maximumTenantPeoplePerLookup = 10
+    static let ticketPriorityValues: Set<String> = ["low", "medium", "high", "urgent"]
+    static let defaultTicketPriority = "medium"
 
     /// Knowledge base searches default to ForIT's own tenant, where the FL3XX and internal how-to
     /// articles live. A client's slug (for example planet-nine) searches that client's articles
@@ -164,6 +186,47 @@ enum WingmanToolCatalog {
             ],
             minimumAccessLevel: .viewer
         ),
+        WingmanToolDescriptor(
+            name: listTenantsToolName,
+            description: "List the clients ForIT supports (the support tenants): each one's tenant_id, name and slug. Call it to turn a company name the user said (\"Planet Nine\", \"Great North\") into the tenant_id that \(findTenantPersonToolName) and \(createTicketToolName) need, or to find a slug for \(listTicketsToolName). Match the name loosely. If nothing matches, tell the user that client is not set up in ForIT support yet.",
+            inputSchema: [
+                "type": "object",
+                "properties": [String: Any](),
+                "required": [],
+            ],
+            minimumAccessLevel: .viewer
+        ),
+        WingmanToolDescriptor(
+            name: findTenantPersonToolName,
+            description: "Find a person at a client in that client's directory, by name or email: returns display name, email, job title and department. Use it to get the email address of the person a ticket is for. Needs the tenant_id from \(listTenantsToolName). If nobody matches, ask the user for the person's email address; never guess one.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "tenant": ["type": "string", "description": "The client's tenant_id (UUID) from \(listTenantsToolName)."],
+                    "search": ["type": "string", "description": "The person's name, or part of it, or their email address."],
+                ],
+                "required": ["tenant", "search"],
+            ],
+            minimumAccessLevel: .viewer
+        ),
+        WingmanToolDescriptor(
+            name: createTicketToolName,
+            description: "File a support ticket for a person at a client, in two calls. First call it WITHOUT confirm: nothing is filed; you get a preview to read back to the user (client, person, subject, priority), and you ask them to say \"go ahead\". Only when the user has said go ahead in a LATER message, call it again WITH confirm true and the same details: the app resends the previewed ticket with the user's own words, and you get the ticket number to tell them. Never set confirm on the first call, never file without the read-back, and never invent an email address: the requester comes from \(findTenantPersonToolName) or from the user. Write the subject and description in normal capitalisation (they are written, not spoken): the subject in a few words; the description with what is wrong, where (which system or screen), since when, and what has been tried.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "tenantId": ["type": "string", "description": "The client's tenant_id (UUID) from \(listTenantsToolName)."],
+                    "requesterEmail": ["type": "string", "description": "Email address of the person the ticket is for, from \(findTenantPersonToolName) or given by the user."],
+                    "requesterName": ["type": "string", "description": "That person's name, if known."],
+                    "subject": ["type": "string", "description": "One line, a few words."],
+                    "description": ["type": "string", "description": "The problem in full: what, where, since when, what was tried. Plain text."],
+                    "priority": ["type": "string", "enum": ["low", "medium", "high", "urgent"], "description": "Default medium. urgent only when the user says so or an operation is stopped."],
+                    "confirm": ["type": "boolean", "description": "Omitted or false: preview only. true: file the previewed ticket; allowed only after the user said go ahead in a later message."],
+                ],
+                "required": ["tenantId", "requesterEmail", "subject", "description"],
+            ],
+            minimumAccessLevel: .operatorLevel
+        ),
     ]
 
     /// What the model is told it can call. Nothing outside `tools` ever appears here.
@@ -194,13 +257,30 @@ enum WingmanToolCatalog {
         toolName: String,
         modelArguments: [String: Any],
         signedInAccount: WingmanSignedInAccount?,
-        vocabulary: WingmanVocabulary = WingmanVocabulary.builtIn
+        vocabulary: WingmanVocabulary = WingmanVocabulary.builtIn,
+        spokenTranscript: String = "",
+        pendingTicketPreview: WingmanPendingTicketPreview? = nil
     ) throws -> WingmanPreparedToolCall {
         guard descriptor(named: toolName) != nil else {
             throw WingmanToolRefusal.notOnAllowList(toolName: toolName)
         }
 
         switch toolName {
+        case listTenantsToolName:
+            // Every argument the model might add is dropped: the list is the whole list.
+            return WingmanPreparedToolCall(toolName: toolName, arguments: [:])
+        case findTenantPersonToolName:
+            return WingmanPreparedToolCall(toolName: toolName, arguments: try prepareFindTenantPersonArguments(modelArguments))
+        case createTicketToolName:
+            return WingmanPreparedToolCall(
+                toolName: toolName,
+                arguments: try prepareCreateTicketArguments(
+                    modelArguments,
+                    signedInAccount: signedInAccount,
+                    spokenTranscript: spokenTranscript,
+                    pendingTicketPreview: pendingTicketPreview
+                )
+            )
         case listTicketsToolName:
             return WingmanPreparedToolCall(toolName: toolName, arguments: prepareListTicketsArguments(modelArguments))
         case addTicketNoteToolName:
@@ -367,6 +447,120 @@ enum WingmanToolCatalog {
         return ["articleId": articleId]
     }
 
+    // MARK: - Filing a ticket
+
+    private static func prepareFindTenantPersonArguments(_ modelArguments: [String: Any]) throws -> [String: Any] {
+        guard let tenantId = nonEmptyString(modelArguments["tenant"]) else {
+            throw WingmanToolRefusal.invalidArguments(toolName: findTenantPersonToolName, reason: "tenant (the client's tenant_id) is required; get it from \(listTenantsToolName) first.")
+        }
+        guard let searchText = nonEmptyString(modelArguments["search"]) else {
+            throw WingmanToolRefusal.invalidArguments(toolName: findTenantPersonToolName, reason: "search (the person's name or email) is required.")
+        }
+        // The gateway would list a whole directory without a search; a spoken lookup never wants that.
+        return ["tenant": tenantId, "search": searchText]
+    }
+
+    /// The line that says which person's Wingman filed the ticket. for-Support records every
+    /// gateway create under its automation identity, so without this the agent working the ticket
+    /// could not tell who asked for it.
+    static func ticketFiledByLine(signedInAccount: WingmanSignedInAccount?) -> String {
+        if let signedInAccount {
+            return "Filed by \(signedInAccount.displayName) (\(signedInAccount.emailAddress)) with Wingman."
+        }
+        return "Filed with Wingman."
+    }
+
+    private static func prepareCreateTicketArguments(
+        _ modelArguments: [String: Any],
+        signedInAccount: WingmanSignedInAccount?,
+        spokenTranscript: String,
+        pendingTicketPreview: WingmanPendingTicketPreview?
+    ) throws -> [String: Any] {
+        let modelWantsToFile = (modelArguments["confirm"] as? Bool) == true
+        if modelWantsToFile {
+            return try confirmedCreateTicketArguments(spokenTranscript: spokenTranscript, pendingTicketPreview: pendingTicketPreview)
+        }
+        return try previewCreateTicketArguments(modelArguments, signedInAccount: signedInAccount)
+    }
+
+    /// The first call: the ticket as the model drafted it, cleaned, and with no confirmation token,
+    /// so for-Support previews it and creates nothing.
+    private static func previewCreateTicketArguments(
+        _ modelArguments: [String: Any],
+        signedInAccount: WingmanSignedInAccount?
+    ) throws -> [String: Any] {
+        guard let tenantId = nonEmptyString(modelArguments["tenantId"]) else {
+            throw WingmanToolRefusal.invalidArguments(toolName: createTicketToolName, reason: "tenantId is required; find the client with \(listTenantsToolName) first.")
+        }
+        guard let requesterEmail = nonEmptyString(modelArguments["requesterEmail"])?.lowercased(), looksLikeEmailAddress(requesterEmail) else {
+            throw WingmanToolRefusal.invalidArguments(toolName: createTicketToolName, reason: "requesterEmail must be the email address of the person the ticket is for; find them with \(findTenantPersonToolName) or ask the user for it.")
+        }
+        guard let subject = nonEmptyString(modelArguments["subject"]) else {
+            throw WingmanToolRefusal.invalidArguments(toolName: createTicketToolName, reason: "subject is required.")
+        }
+        guard let description = nonEmptyString(modelArguments["description"]) else {
+            throw WingmanToolRefusal.invalidArguments(toolName: createTicketToolName, reason: "description is required.")
+        }
+
+        var requester: [String: Any] = ["email": requesterEmail]
+        if let requesterName = nonEmptyString(modelArguments["requesterName"]) {
+            requester["displayName"] = requesterName
+        }
+
+        // Once, even if the model already wrote it into the description.
+        let filedByLine = ticketFiledByLine(signedInAccount: signedInAccount)
+        var descriptionWithAttribution = String(description.prefix(maximumTicketDescriptionCharacters))
+        if !descriptionWithAttribution.contains(filedByLine) {
+            descriptionWithAttribution += "\n\n" + filedByLine
+        }
+
+        let requestedPriority = nonEmptyString(modelArguments["priority"])?.lowercased() ?? defaultTicketPriority
+        return [
+            "tenantId": tenantId,
+            "requester": requester,
+            "subject": String(subject.prefix(maximumTicketSubjectCharacters)),
+            "description": descriptionWithAttribution,
+            "source": "api",
+            "priority": ticketPriorityValues.contains(requestedPriority) ? requestedPriority : defaultTicketPriority,
+        ]
+    }
+
+    /// The second call: the previewed ticket exactly as for-Support saw it, its token, and the
+    /// person's words from this turn as the consent. Refused unless those words are a go-ahead.
+    private static func confirmedCreateTicketArguments(
+        spokenTranscript: String,
+        pendingTicketPreview: WingmanPendingTicketPreview?
+    ) throws -> [String: Any] {
+        guard let pendingTicketPreview, pendingTicketPreview.isUsable() else {
+            let previewLifetimeMinutes = Int(WingmanPendingTicketPreview.maximumAge / 60)
+            throw WingmanToolRefusal.ticketFilingNotConfirmed(reason: "there is no ticket preview waiting for a go-ahead (none was made, or it is more than \(previewLifetimeMinutes) minutes old). Call \(createTicketToolName) without confirm to preview it, read the preview back, and ask the user to \(WingmanSpokenConsent.spokenApprovalHint).")
+        }
+        switch WingmanSpokenConsent.verdict(forSpokenWords: spokenTranscript) {
+        case .deny:
+            throw WingmanToolRefusal.ticketFilingDeclined
+        case .hold:
+            throw WingmanToolRefusal.ticketFilingNotConfirmed(reason: "what the user said in this message is not a go-ahead. Do not file it; ask them to \(WingmanSpokenConsent.spokenApprovalHint), and call again with confirm true when they have.")
+        case .approve:
+            break
+        }
+        var gatewayArguments = pendingTicketPreview.gatewayArguments
+        gatewayArguments["confirmation_token"] = pendingTicketPreview.confirmationToken
+        // Verbatim: for-Support's send rail judges these words itself and keeps them with the hold it settles.
+        let spokenWords = spokenTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        gatewayArguments["consent"] = String(spokenWords.prefix(maximumSpokenConsentCharacters))
+        return gatewayArguments
+    }
+
+    /// Enough of a check to catch a name or a phone number where an email address should be; the
+    /// real validation is for-Support's.
+    static func looksLikeEmailAddress(_ candidate: String) -> Bool {
+        guard !candidate.contains(" "), let atIndex = candidate.firstIndex(of: "@"), atIndex != candidate.startIndex else {
+            return false
+        }
+        let domain = candidate[candidate.index(after: atIndex)...]
+        return domain.contains(".") && !domain.hasPrefix(".") && !domain.hasSuffix(".") && !domain.contains("@")
+    }
+
     // MARK: - Result condensing
 
     /// Fields of a ticket the model needs to answer or draft. Everything else the gateway
@@ -393,9 +587,98 @@ enum WingmanToolCatalog {
             return condenseKnowledgeBaseSearchResult(resultText) ?? resultText
         case readKnowledgeBaseArticleToolName:
             return condenseKnowledgeBaseArticleResult(resultText) ?? resultText
+        case listTenantsToolName:
+            return condenseTenantListResult(resultText) ?? resultText
+        case findTenantPersonToolName:
+            return condenseTenantPeopleResult(resultText) ?? resultText
+        case createTicketToolName:
+            return condenseCreateTicketResult(resultText) ?? resultText
         default:
             return resultText
         }
+    }
+
+    private static let tenantFieldsKeptForModel = ["tenant_id", "tenant_name", "slug"]
+    private static let tenantPersonFieldsKeptForModel = ["display_name", "email", "job_title", "department", "tenant_name", "account_enabled"]
+    private static let ticketPreviewFieldsKeptForModel = ["tenantName", "requester", "subject", "description", "priority"]
+    private static let createdTicketFieldsKeptForModel = ["ticket_id", "ticket_number", "subject", "status", "priority"]
+
+    /// What the model is told after a preview: the fields to read back, never the token (the app
+    /// holds it and the model never resends it), and what to do next.
+    static let ticketPreviewInstructionForModel = "Nothing is filed yet. Read this preview back to the user in a sentence (client, person, subject, priority) and ask them to \(WingmanSpokenConsent.spokenApprovalHint). Do not call \(createTicketToolName) again in this turn. When the user has said go ahead in a later message, call it with confirm true."
+
+    /// for-Support answers 409 `send_rail_hold` when its send rail did not accept the consent it was
+    /// given; the model is told to get the words, not to retry blindly.
+    static let ticketHeldByForSupportMessage = "for-Support did not file the ticket: its send rail needs the user's spoken go-ahead and did not accept what was sent. Ask the user to \(WingmanSpokenConsent.spokenApprovalHint), then call \(createTicketToolName) with confirm true once more."
+
+    private static func condenseTenantListResult(_ resultText: String) -> String? {
+        guard let resultObject = jsonObject(fromResultText: resultText),
+              let tenants = resultObject["tenants"] as? [[String: Any]] else {
+            return nil
+        }
+        return jsonText(fromResultObject: ["tenants": tenants.map { keepFields(tenantFieldsKeptForModel, of: $0) }])
+    }
+
+    private static func condenseTenantPeopleResult(_ resultText: String) -> String? {
+        guard let resultObject = jsonObject(fromResultText: resultText),
+              let people = resultObject["users"] as? [[String: Any]] else {
+            return nil
+        }
+        // The directory route also returns every tenant and per-person device and app counts; the
+        // model asked about one person.
+        let condensedPeople = people.prefix(maximumTenantPeoplePerLookup).map { keepFields(tenantPersonFieldsKeptForModel, of: $0) }
+        return jsonText(fromResultObject: ["users": Array(condensedPeople), "count": people.count])
+    }
+
+    private static func condenseCreateTicketResult(_ resultText: String) -> String? {
+        if let resultObject = jsonObject(fromResultText: resultText) {
+            if (resultObject["requires_confirmation"] as? Bool) == true, let preview = resultObject["preview"] as? [String: Any] {
+                return jsonText(fromResultObject: [
+                    "requires_confirmation": true,
+                    "preview": keepFields(ticketPreviewFieldsKeptForModel, of: preview),
+                    "message": ticketPreviewInstructionForModel,
+                ])
+            }
+            if let ticket = resultObject["ticket"] as? [String: Any] {
+                return jsonText(fromResultObject: ["success": true, "ticket": keepFields(createdTicketFieldsKeptForModel, of: ticket)])
+            }
+        }
+        if isSendRailHoldResult(resultText) {
+            return ticketHeldByForSupportMessage
+        }
+        return nil
+    }
+
+    /// The gateway hands a 409 back as an error result naming the status, and the body when it has
+    /// it. Checked only after a preview or a created ticket has been ruled out.
+    static func isSendRailHoldResult(_ resultText: String) -> Bool {
+        resultText.contains("send_rail_hold") || resultText.contains("409")
+    }
+
+    /// The preview for-Support returned, to hold for the person's go-ahead; nil when the result is
+    /// not a preview. `gatewayArgumentsSent` produced it and are what the confirming call resends.
+    static func pendingTicketPreview(
+        fromCreateTicketResultText resultText: String,
+        gatewayArgumentsSent: [String: Any],
+        previewedAt: Date = Date()
+    ) -> WingmanPendingTicketPreview? {
+        guard let resultObject = jsonObject(fromResultText: resultText),
+              (resultObject["requires_confirmation"] as? Bool) == true,
+              let confirmationToken = nonEmptyString(resultObject["confirmation_token"]) else {
+            return nil
+        }
+        let preview = resultObject["preview"] as? [String: Any]
+        return WingmanPendingTicketPreview(
+            confirmationToken: confirmationToken,
+            gatewayArguments: gatewayArgumentsSent,
+            previewedAt: previewedAt,
+            tenantName: nonEmptyString(preview?["tenantName"])
+        )
+    }
+
+    static func isCreatedTicketResult(_ resultText: String) -> Bool {
+        guard let resultObject = jsonObject(fromResultText: resultText) else { return false }
+        return (resultObject["success"] as? Bool) == true && resultObject["ticket"] is [String: Any]
     }
 
     private static func condenseTicketListResult(_ resultText: String) -> String? {

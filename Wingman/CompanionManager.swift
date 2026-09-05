@@ -123,6 +123,11 @@ final class CompanionManager: ObservableObject {
     /// turn does not wait for it after the key comes up. nil when none is running.
     private var gatewayToolListRefreshTask: Task<Void, Never>?
 
+    /// The ticket for-Support has previewed and is waiting on the person's spoken go-ahead
+    /// (WingmanTicketFiling.swift). Set when a preview comes back, cleared once the ticket is filed
+    /// or the person says no; a stale one is refused by the catalog.
+    private var pendingTicketPreview: WingmanPendingTicketPreview?
+
     /// Cuts the reply into sentences for text-to-speech while it streams. Reset for every model
     /// call; held here (not in a local) because the stream callback is @Sendable and cannot
     /// mutate a captured local.
@@ -586,8 +591,9 @@ final class CompanionManager: ObservableObject {
     - support_addTicketNote saves a draft reply on a ticket as an internal note. use it when the user asks you to draft a reply or a response. write the reply itself as the content, addressed to the requester, in a professional tone and normal capitalisation (this is written, not spoken). the app marks it "DRAFT (Wingman):" and it is never sent; afterwards tell the user the draft is on the ticket as an internal note for them to review and send.
     - forit_avops_search_flights answers any flight question for the airline ops tenant: today's schedule, delays, cancellations, a specific flight or airport.
     - support_searchKbArticles searches the forit knowledge base, which holds the fl3xx articles (fl3xx is the flight operations and scheduling platform forit supports) and forit's own how-tos. any "how do i", "where is", "why does" or setup question about fl3xx or another supported system starts here. search with two to four keywords from the question (the screen, the object, the action: "quote create", "crew roster availability"), never the whole sentence, because every word must match an article; if the hits look off or there are none, search once more with different keywords. then support_getKbArticle reads the best match in full. answer from the article in your own words, name the article so they can open it, and keep to the steps that matter. if nothing relevant comes back after a second search, say in a few words that the knowledge base has no article on it, then still help: give the general fl3xx guidance you know (which module or screen it lives in, the usual way it is done), say plainly that this is general knowledge and not a forit-verified procedure, and ask them to confirm it in fl3xx. never present a guessed menu, field or setting as if it came from an article.
+    - filing a ticket for a customer: when the user asks you to put in, open, log or file a ticket for someone at a client (a person at planet nine who called in, say), you need the client, who it is for, what is wrong, where (which system or screen), since when, and what has been tried. ask for what is missing in one question, not several. support_listTenants turns the client's name into its tenant_id (match loosely; if the client isn't there, say it isn't set up in forit support yet and don't file it under another client). support_listInventoryUsers finds the person in that client's directory by name and gives you their email; if they aren't in it, ask the user for the email address, never guess one. then call support_createTicket without confirm: nothing is filed yet. read the preview back in one sentence (client, person, subject, priority) and ask them to say "go ahead". only when they have said go ahead in a later message do you call support_createTicket again with confirm true and the same details, and then you tell them the ticket number as digits. if they say no or want something changed, nothing was filed: fix it and preview again. if the app or for-support answers that there was no go-ahead, ask for the words; never retry on your own, and never set confirm on the first call.
     - if a tool named here is missing from your tool list, that part isn't connected yet: say so instead of answering as if you had looked.
-    you cannot send replies, close, assign, delete or bulk-update tickets, or change user accounts. if asked, say the draft or the note is as far as you go and the staff member finishes it in the support portal.
+    you cannot send replies, close, assign, delete or bulk-update tickets, or change user accounts; filing a new ticket after the read-back is the one thing you create. if asked for the rest, say the draft or the note is as far as you go and the staff member finishes it in the support portal.
     when summarising a ticket say who raised it, what it is about, its status and what is blocking it, in a sentence or two. for a list give the count and the two or three that matter most (breached or nearest sla, highest priority), not every ticket. say ticket numbers as digits, like "ticket two twenty seven". a tool error means you say what failed; never invent the answer.
 
     element pointing:
@@ -883,7 +889,7 @@ final class CompanionManager: ObservableObject {
 
             var toolResultBlocks: [[String: Any]] = []
             for toolUse in streamedTurn.toolUses {
-                let outcome = await executeGatewayTool(toolUse, usageRecorder: usageRecorder)
+                let outcome = await executeGatewayTool(toolUse, spokenTranscript: transcript, usageRecorder: usageRecorder)
                 guard !Task.isCancelled else { throw CancellationError() }
                 switch outcome {
                 case .accessProblem(let spokenReply, let panelMessage):
@@ -988,19 +994,39 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// Keeps the preview for-Support returned so the confirming call can resend it exactly, and
+    /// forgets it once the ticket exists. An error result (a send-rail hold, say) leaves whatever
+    /// was pending alone: the model is told to ask for the words again, not to preview again.
+    private func rememberTicketFilingOutcome(resultText: String, gatewayArgumentsSent: [String: Any]) {
+        if let preview = WingmanToolCatalog.pendingTicketPreview(fromCreateTicketResultText: resultText, gatewayArgumentsSent: gatewayArgumentsSent) {
+            pendingTicketPreview = preview
+            print("🎫 Ticket previewed for \(preview.tenantName ?? "a client"); waiting for the spoken go-ahead")
+        } else if WingmanToolCatalog.isCreatedTicketResult(resultText) {
+            pendingTicketPreview = nil
+            print("🎫 Ticket filed")
+        }
+    }
+
     /// Applies the app-side policy (allow-list, argument rewriting) and calls the gateway.
     /// Sign-in failures propagate so the caller's existing sign-in handling runs; everything else
-    /// becomes an outcome the model or the fixed refusal can speak.
-    private func executeGatewayTool(_ toolUse: ClaudeToolUseRequest, usageRecorder: WingmanTurnUsageRecorder) async -> GatewayToolOutcome {
+    /// becomes an outcome the model or the fixed refusal can speak. `spokenTranscript` is what the
+    /// person said this turn: the words a ticket filing is judged on.
+    private func executeGatewayTool(_ toolUse: ClaudeToolUseRequest, spokenTranscript: String, usageRecorder: WingmanTurnUsageRecorder) async -> GatewayToolOutcome {
         let preparedCall: WingmanPreparedToolCall
         do {
             preparedCall = try WingmanToolCatalog.prepareCall(
                 toolName: toolUse.name,
                 modelArguments: toolUse.input,
                 signedInAccount: signInManager.signedInAccount,
-                vocabulary: vocabularyStore.vocabulary
+                vocabulary: vocabularyStore.vocabulary,
+                spokenTranscript: spokenTranscript,
+                pendingTicketPreview: pendingTicketPreview
             )
         } catch let refusal as WingmanToolRefusal {
+            if refusal == .ticketFilingDeclined {
+                pendingTicketPreview = nil
+                print("🎫 Ticket preview dropped: the user said no")
+            }
             WingmanAnalytics.trackToolRefused(toolName: toolUse.name, reason: refusal.modelFacingMessage)
             usageRecorder.noteToolCall(name: toolUse.name, searchTerms: nil, outcome: .refused)
             print("🛑 Tool refused by the app: \(refusal.modelFacingMessage)")
@@ -1024,6 +1050,9 @@ final class CompanionManager: ObservableObject {
             let toolResult = try await gatewayToolClient.callTool(named: preparedCall.toolName, arguments: preparedCall.arguments)
             let condensedText = WingmanToolCatalog.condenseResult(toolName: preparedCall.toolName, resultText: toolResult.text)
             usageRecorder.noteToolCall(name: preparedCall.toolName, searchTerms: searchTermsForUsageReport, outcome: toolResult.isError ? .error : .ok)
+            if preparedCall.toolName == WingmanToolCatalog.createTicketToolName, !toolResult.isError {
+                rememberTicketFilingOutcome(resultText: toolResult.text, gatewayArgumentsSent: preparedCall.arguments)
+            }
             if toolResult.isError {
                 // The label carries the HTTP status the gateway reported (tool_error_http_401), never
                 // the error body, so the Mac log says why a tool failed without holding any data.
