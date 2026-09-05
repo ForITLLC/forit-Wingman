@@ -96,7 +96,17 @@ struct WingmanIdTokenClaims: Equatable {
 
 /// One generic-password item in the login keychain. Only the refresh token is stored; id and
 /// access tokens stay in memory and are re-minted from it on launch.
-struct WingmanKeychainStore {
+///
+/// The item is created with an access list that lets any application on this Mac read it, so
+/// no launch ever shows the "Wingman wants to use your confidential information" dialog. The
+/// login keychain grants silent access by the reader's code signature, and the interim
+/// self-signed certificate is not one securityd trusts: on Ben's Mac every launch prompted,
+/// "Always Allow" did not carry to the next launch even of the same build, and a dialog nobody
+/// answered blocked the launch (`.ai/decisions.md` 014). The protection left is the keychain
+/// itself (encrypted at rest, locked with the login keychain), the same posture as a token file
+/// readable only by this user. Move to the data protection keychain once a ForIT Developer ID
+/// gives the app a Team ID.
+struct WingmanKeychainStore: Sendable {
     let service: String
     let account: String
 
@@ -123,15 +133,31 @@ struct WingmanKeychainStore {
 
     func save(_ value: String) {
         // Replace rather than update so a value written by an older build with different
-        // attributes never leaves two items behind.
+        // attributes (or a stricter access list) never leaves two items behind.
         delete()
         var addQuery = baseQuery
         addQuery[kSecValueData as String] = Data(value.utf8)
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        if let accessWithoutPrompt = makeAccessAllowingAnyApplication() {
+            addQuery[kSecAttrAccess as String] = accessWithoutPrompt
+        }
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         if status != errSecSuccess {
             print("⚠️ Keychain: could not store the refresh token (OSStatus \(status)); the user will sign in again next launch")
         }
+    }
+
+    /// An access list with no trusted-application restriction: every application running as
+    /// this user may read the item without a dialog. A nil trusted list is how the Security
+    /// framework spells "any application" (`SecAccessCreate`). Falls back to the default list
+    /// (this build only, prompts for every other build) if the framework refuses.
+    private func makeAccessAllowingAnyApplication() -> SecAccess? {
+        var access: SecAccess?
+        let status = SecAccessCreate("Wingman sign-in" as CFString, nil, &access)
+        guard status == errSecSuccess, let access else {
+            print("⚠️ Keychain: could not create the open access list (OSStatus \(status)); the default list will prompt other builds")
+            return nil
+        }
+        return access
     }
 
     func delete() {
