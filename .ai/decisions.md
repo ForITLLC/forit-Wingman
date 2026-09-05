@@ -283,3 +283,33 @@ cache marker.
 - A reply that fails mid-way is now partly spoken before the fallback message. The queue is dropped on the
   first error so nothing stale plays after it.
 - Measurement after install is by the Mac's unified log (relay and TTS request timings) and by ear.
+
+## 005 — Releases are signed with an interim self-signed certificate so permission grants survive updates
+
+### Context
+
+Every CI build was ad-hoc signed. macOS keys an app's Accessibility and Screen Recording grants to its
+designated requirement, and an ad-hoc signature's requirement is the build's own cdhash, so every
+install of a new build invalidated both grants. On 2026-09-05 Ben re-granted them twice in one evening
+("Now screen recording is a problem"). Sparkle updates would have had the same effect. A ForIT Developer
+ID would fix it properly but needs an Apple Developer Program membership, which is Ben's decision.
+
+### Decision
+
+Sign the Release build with a self-signed code-signing certificate (CN "ForIT Wingman Interim Code
+Signing", valid to 2036) held as two repo secrets, `MACOS_SIGNING_P12_BASE64` and
+`MACOS_SIGNING_P12_PASSWORD`. The workflow imports it into a temporary keychain, trusts it for code
+signing on the runner, builds with `CODE_SIGN_STYLE=Manual` and that identity, and fails the job if the
+app's designated requirement still names a cdhash. Without the secrets the build is ad-hoc signed as
+before. The hardened runtime stays off (library validation wants a Team ID, see `CLAUDE.md`).
+
+### Consequences
+
+- The designated requirement becomes `identifier "io.forit.wingman" and certificate leaf = H"…"`, the
+  same for every build signed by this certificate, so grants made on one build hold on the next.
+- Gatekeeper treats the app exactly as it treated the ad-hoc build (unidentified developer, not
+  notarised). Nothing about distribution changes.
+- The private key exists only in the repo secret. Losing or rotating it means one more grant of each
+  permission on every Mac, not a broken app.
+- Replace with a ForIT Developer ID when one exists; the same workflow step takes that PKCS#12 and the
+  hardened runtime can then go back on.
