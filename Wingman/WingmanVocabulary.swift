@@ -16,6 +16,7 @@
 //  Nothing leaves the Mac: the vocabulary is a JSON file in Application Support.
 //
 
+import Combine
 import Foundation
 
 /// One taught term.
@@ -203,7 +204,9 @@ final class WingmanVocabularyStore: ObservableObject {
     private let vocabularyFileURL: URL
 
     /// The default file: ~/Library/Application Support/io.forit.wingman/vocabulary.json.
-    static func defaultVocabularyFileURL() -> URL {
+    /// `nonisolated` because it is the initializer's default argument, and a default argument is
+    /// evaluated outside the main actor; it touches no state of the store anyway.
+    nonisolated static func defaultVocabularyFileURL() -> URL {
         let applicationSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         return applicationSupportDirectory
