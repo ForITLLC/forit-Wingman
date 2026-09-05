@@ -128,6 +128,15 @@ final class CompanionManager: ObservableObject {
     /// turn does not wait for it after the key comes up. nil when none is running.
     private var gatewayToolListRefreshTask: Task<Void, Never>?
 
+    /// The background fetch of ForIT Support's vocabulary (WingmanVocabulary.swift), started after
+    /// sign-in and on key-down once the stored list is `vocabularyMaximumAge` old. nil when none is
+    /// running. A failed attempt is not repeated for `vocabularyRefreshRetryInterval`, so a gateway
+    /// outage costs one call every few minutes, never one per key press.
+    private var vocabularyRefreshTask: Task<Void, Never>?
+    private var vocabularyRefreshLastAttemptAt: Date?
+    private static let vocabularyMaximumAge: TimeInterval = 60 * 60
+    private static let vocabularyRefreshRetryInterval: TimeInterval = 5 * 60
+
     /// The ticket for-Support has previewed and is waiting on the person's spoken go-ahead
     /// (WingmanTicketFiling.swift). Set when a preview comes back, cleared once the ticket is filed
     /// or the person says no; a stale one is refused by the catalog.
@@ -150,6 +159,7 @@ final class CompanionManager: ObservableObject {
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
     private var vocabularyCancellable: AnyCancellable?
+    private var signInStateForVocabularyCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     /// Scheduled hide for transient cursor mode — cancelled if the user
@@ -225,6 +235,7 @@ final class CompanionManager: ObservableObject {
         bindAudioPowerLevel()
         bindShortcutTransitions()
         bindVocabularyToSpeechRecognition()
+        bindVocabularyRefreshToSignIn()
         // Eagerly touch the Claude API so its TLS warmup handshake completes
         // well before the onboarding demo fires at ~40s into the video.
         _ = claudeAPI
@@ -482,10 +493,11 @@ final class CompanionManager: ObservableObject {
             }
 
             // The user is about to speak for a few seconds: use that time to wake the relay's
-            // worker and to refresh the gateway tool list if it is stale, so neither sits on
-            // the critical path once the key comes up.
+            // worker and to refresh the gateway tool list and ForIT Support's vocabulary if they
+            // are stale, so none of it sits on the critical path once the key comes up.
             claudeAPI.warmUpRelay()
             refreshGatewayToolListIfStale()
+            refreshVocabularyFromForITSupportIfStale()
 
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
@@ -556,8 +568,8 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Vocabulary
 
-    /// Keeps Apple Speech's contextual keyterms in step with the taught vocabulary, so a term the
-    /// user adds in the panel is favoured by the recogniser on the very next push-to-talk.
+    /// Keeps Apple Speech's contextual keyterms in step with the vocabulary, so a term ForIT Support
+    /// publishes is favoured by the recogniser on the very next push-to-talk after it is fetched.
     private func bindVocabularyToSpeechRecognition() {
         vocabularyCancellable = vocabularyStore.$vocabulary
             .receive(on: DispatchQueue.main)
@@ -566,7 +578,93 @@ final class CompanionManager: ObservableObject {
             }
     }
 
-    /// The system prompt for this turn: the fixed companion prompt plus the taught vocabulary.
+    /// Fetches ForIT Support's vocabulary once the person is signed in. The list is Support's, not
+    /// the Mac's, so a term added there reaches every Wingman at its next sign-in or within the hour.
+    private func bindVocabularyRefreshToSignIn() {
+        signInStateForVocabularyCancellable = signInManager.$signInState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] signInState in
+                guard case .signedIn = signInState else { return }
+                self?.refreshVocabularyFromForITSupportIfStale()
+            }
+    }
+
+    /// Starts a background fetch of ForIT Support's vocabulary when the stored list is due and no
+    /// fetch is running or has just failed. Never on a spoken turn's critical path: a turn uses
+    /// whatever the store holds at the time.
+    private func refreshVocabularyFromForITSupportIfStale() {
+        guard signInManager.isSignedIn, vocabularyRefreshTask == nil else { return }
+        guard vocabularyStore.isDueForRefresh(maximumAge: Self.vocabularyMaximumAge) else { return }
+        if let lastAttemptAt = vocabularyRefreshLastAttemptAt,
+           Date().timeIntervalSince(lastAttemptAt) < Self.vocabularyRefreshRetryInterval {
+            return
+        }
+        vocabularyRefreshLastAttemptAt = Date()
+        vocabularyRefreshTask = Task { [weak self] in
+            await self?.fetchVocabularyFromForITSupport()
+            self?.vocabularyRefreshTask = nil
+        }
+    }
+
+    /// One fetch. Makes sure the gateway's `tools/list` is known, skips quietly when the gateway does
+    /// not expose the vocabulary tool yet (for-Support has not shipped the route), otherwise calls it
+    /// and replaces the stored list. A failure is logged and the current list stays; the model never
+    /// sees this tool and no spoken turn waits for it.
+    private func fetchVocabularyFromForITSupport() async {
+        if let refreshAlreadyRunning = gatewayToolListRefreshTask {
+            await refreshAlreadyRunning.value
+        } else if !isCachedGatewayToolListUsable {
+            await fetchGatewayToolList()
+        }
+        guard let exposedToolNames = gatewayExposedToolNames else {
+            // tools/list itself failed and was logged there; the retry interval applies.
+            return
+        }
+        guard exposedToolNames.contains(WingmanVocabulary.foritSupportToolName) else {
+            print("ℹ️ Gateway does not expose \(WingmanVocabulary.foritSupportToolName) yet; keeping the current vocabulary")
+            return
+        }
+
+        do {
+            let result = try await gatewayToolClient.callTool(named: WingmanVocabulary.foritSupportToolName, arguments: [:])
+            guard !result.isError else {
+                WingmanAnalytics.trackVocabularyRefreshFailed(reason: WingmanGatewayToolClient.failureOutcomeLabel(forErrorResultText: result.text))
+                return
+            }
+            guard let publishedTerms = WingmanVocabulary.terms(fromForITSupportResultText: result.text) else {
+                WingmanAnalytics.trackVocabularyRefreshFailed(reason: "unexpected_result_shape")
+                return
+            }
+            if vocabularyStore.replaceWithTermsFromForITSupport(publishedTerms, fetchedAt: Date()) {
+                WingmanAnalytics.trackVocabularyRefreshed(termCount: publishedTerms.count)
+            } else {
+                print("ℹ️ ForIT Support has published no vocabulary yet; keeping the built-in terms")
+            }
+        } catch {
+            // A sign-in problem here is not this fetch's to handle: the next spoken turn meets the
+            // same answer and shows the banner. The current list stays.
+            WingmanAnalytics.trackVocabularyRefreshFailed(reason: Self.vocabularyRefreshFailureReason(for: error))
+        }
+    }
+
+    /// A stable label for the log, never the gateway's text.
+    private static func vocabularyRefreshFailureReason(for error: Error) -> String {
+        guard let gatewayError = error as? WingmanGatewayToolError else { return "gateway_unreachable" }
+        switch gatewayError {
+        case .accessDenied:
+            return "access_denied"
+        case .insufficientAccess:
+            return "insufficient_access"
+        case .gatewayRejected(let statusCode, _):
+            return "gateway_http_\(statusCode)"
+        case .invalidResponse:
+            return "invalid_response"
+        case .remoteError(let code, _):
+            return "remote_error_\(code)"
+        }
+    }
+
+    /// The system prompt for this turn: the fixed companion prompt plus the vocabulary.
     private var voiceSystemPromptForThisTurn: String {
         Self.companionVoiceResponseSystemPrompt + vocabularyStore.vocabulary.systemPromptSection()
     }
