@@ -203,13 +203,43 @@ jobs:
           echo "dmg_name=$DMG_NAME" >> "$GITHUB_OUTPUT"
           ls -la "build/$DMG_NAME"
 
-      - name: Upload .app and .dmg
+      # Jamf deploys a .pkg, not a DMG: a component package that puts Wingman.app in /Applications,
+      # with a postinstall that launches it for the person at the console. It is unsigned (there is
+      # no Developer ID Installer certificate yet), which a Jamf policy accepts; an MDM install command
+      # would not. The step then installs the package on the runner the way a policy does (installer
+      # as root) and checks the copy in /Applications, so a broken package never reaches a release.
+      - name: Package installer (.pkg for Jamf)
+        id: pkg
+        run: |
+          APP=build/DerivedData/Build/Products/Release/Wingman.app
+          PKG_NAME="Wingman-$APP_VERSION.pkg"
+          chmod +x packaging/pkg-scripts/postinstall
+          pkgbuild --component "$APP" \
+            --install-location /Applications \
+            --identifier io.forit.wingman.pkg \
+            --version "$APP_VERSION" \
+            --scripts packaging/pkg-scripts \
+            "build/$PKG_NAME"
+          echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
+          ls -la "build/$PKG_NAME"
+          sudo installer -pkg "build/$PKG_NAME" -target / -verboseR 2>&1 | tail -5
+          test -d /Applications/Wingman.app
+          codesign --verify --deep --strict /Applications/Wingman.app
+          /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" /Applications/Wingman.app/Contents/Info.plist | grep -qx "$APP_VERSION"
+          pkgutil --pkg-info io.forit.wingman.pkg
+          # The postinstall launches the app for the console user; stop that copy before the job ends.
+          sleep 3
+          pkill -x Wingman || true
+
+      - name: Upload .app, .dmg and .pkg
         uses: actions/upload-artifact@v4
         with:
           name: Wingman-${{ env.APP_VERSION }}
           path: |
             build/DerivedData/Build/Products/Release/Wingman.app
             build/${{ steps.dmg.outputs.dmg_name }}
+            build/${{ steps.pkg.outputs.pkg_name }}
+            build/designated-requirement.txt
             build/build.log
           if-no-files-found: error
 
@@ -254,9 +284,10 @@ jobs:
         run: |
           TAG="v$APP_VERSION"
           DMG="build/${{ steps.dmg.outputs.dmg_name }}"
-          gh release create "$TAG" "$DMG" \
+          PKG="build/${{ steps.pkg.outputs.pkg_name }}"
+          gh release create "$TAG" "$DMG" "$PKG" build/designated-requirement.txt \
             --title "Wingman $APP_VERSION" \
-            --notes "CI build from ${{ github.sha }}, signed with the interim ForIT certificate (not a Developer ID, not notarized: right-click > Open on first launch)." \
+            --notes "CI build from ${{ github.sha }}, signed with the interim ForIT certificate (not a Developer ID, not notarized: right-click > Open on the first launch of a DMG copy). The .pkg installs Wingman.app to /Applications for a Jamf policy (unsigned, so not for an MDM install command); designated-requirement.txt is the code requirement for the PPPC profile." \
             --target "${{ github.sha }}"
 
       - name: Update appcast.xml on main

@@ -91,6 +91,7 @@ The two knowledge base tools answer FL3XX and other "how do I" questions from th
 | `WingmanTests/WingmanSpokenSentenceSplitterTests.swift` | ~74 | Swift Testing coverage for the sentence splitter: early first sentence, batching, number periods, newlines, the pointing tag, the final flush. |
 | `WingmanTests/WingmanVocabularyTests.swift` | ~146 | Swift Testing coverage for the vocabulary: keyterms, whole-word transcript rewrite (longest spoken form first), pronunciation rewrite, prompt section, product-name-as-tenant fallback in the tool policy, the `tool_error_http_NNN` label, and the store round trip. |
 | `WingmanTests/WingmanToolUseTests.swift` | ~420 | Swift Testing coverage for the tool allow-list and draft policy, the knowledge base argument policy and condensing, the `tools/list` narrowing and parsing, the SSE `tool_use` parser, and gateway response / refusal parsing. |
+| `packaging/pkg-scripts/postinstall` | ~18 | Shell script inside the Jamf `.pkg`: quits a stale running Wingman and launches the installed copy for the console user via `launchctl asuser` + `open -b`, never failing the install. |
 | `relay/src/` | ~870 | Azure Functions relay: `health`, `chat` (tool passthrough validation, Anthropic prompt caching on the system prompt and the last user message), `tts` handlers, `keepWarm` timer (every four minutes, keeps the consumption-plan worker warm), Entra token validation, model allow-list. Tests are the `*.test.ts` files beside the sources (`npm test`). |
 
 ## Build & Run
@@ -187,14 +188,29 @@ Do NOT update this file for minor edits, bug fixes, or changes that don't affect
   is the `SPARKLE_PRIVATE_KEY` repo secret and the matching public key is in `Info.plist`. Since 2026-09-05 the updater
   starts at launch (`startSparkleUpdater()` in `WingmanApp.swift`; Ben: "Why are you suddenly asking me to install this?"):
   `SUEnableAutomaticChecks` is on so Sparkle never asks permission to check, and `SUScheduledCheckInterval` is 3600 s so a
-  fix reaches a running Wingman within the hour. Installing is still Sparkle's own prompt, never silent. The first build
-  with the updater on is the last manual install; the update path is proven only by a later release arriving through it,
-  not by the merge (decision `.ai/decisions.md` 007).
-- CI: `.github/workflows/ci.yml` (jobs `test` and `build`), DMG artifacts, GitHub release on main. Since 2026-09-05 the Release
+  fix reaches a running Wingman within the hour. Installing is silent once the person has ticked "automatically download
+  and install" in Sparkle's own alert (the user default `SUAutomaticallyUpdate`, which nothing in the app sets): the update
+  downloads in the background and is swapped in at the next quit with no prompt. Proven on Ben's MacBook on 2026-09-05:
+  0.1.41 to 0.1.45 between 06:09Z and 06:11Z and 0.1.45 to 0.1.48 between 06:15Z and 06:20Z, each with the Autoupdate log
+  line "OK: EdDSA signature is correct for update". Sparkle logs once per launch that this background app schedules checks
+  but "does not implement gentle reminders": a scheduled update alert for a menu-bar-only app can open behind other windows,
+  and the `SPUStandardUserDriverDelegate` gentle-reminder hooks are the fix if that ever matters (not asked for). The first
+  build with the updater on was the last manual install (decision `.ai/decisions.md` 007).
+- CI: `.github/workflows/ci.yml` (jobs `test` and `build`), DMG and `.pkg` artifacts, GitHub release on main. Since 2026-09-05 the Release
   build is signed with an **interim self-signed certificate** held as the repo secrets `MACOS_SIGNING_P12_BASE64` and
   `MACOS_SIGNING_P12_PASSWORD` (ad-hoc when they are absent). macOS keys the Accessibility and Screen Recording grants to the
   app's designated requirement; with a certificate that requirement is the same for every build, so the grants survive an
   update, whereas an ad-hoc signature pins the build's cdhash and every install wiped both grants (Ben, twice, 2026-09-05).
   The job fails if the requirement still names a cdhash. **A Mac that granted permissions to an ad-hoc build needs one reset when it first runs a certificate-signed build**: macOS keeps the old rows keyed to the ad-hoc cdhash, shows their switches as ON, and denies the new build (`tccd`: `matchesCodeRequirement … status: -67050`, `matches platform requirements: No`), so re-granting and restarting change nothing (Ben, 2026-09-05, "after several restarts, it's still not working"). The fix is `tccutil reset Accessibility io.forit.wingman` and `tccutil reset ScreenCapture io.forit.wingman`, then grant once more; the new rows carry the certificate requirement and survive updates. Verified 2026-09-05 05:34Z: the 0.1.35 to 0.1.41 update kept all three grants with no re-grant. **Start a build from ssh with `open -b io.forit.wingman`, never by running the binary from the shell**: macOS then makes the shell the process responsible for the microphone and screen-recording checks and denies both, so only Accessibility logs as granted and the app looks unable to recover its permissions (Ben, 2026-09-05, "why can't it recover … from permissions"; fixed by relaunching through LaunchServices). It is not a Developer ID: Gatekeeper is unchanged and there is no
   notarisation; a new certificate costs one more grant of each permission. Decision `.ai/decisions.md` 005. The Release build passes `ENABLE_HARDENED_RUNTIME=NO`: neither an ad-hoc signature nor the interim certificate has a Team ID, so with the hardened runtime on, library validation rejects the embedded Sparkle framework and the app dies in dyld at launch (found 2026-09-05). The job launches the built app and requires it to stay up for eight seconds. Turn the hardened runtime back on when the build is signed with a ForIT Developer ID.
+- Jamf (2026-09-05, Ben: "make this a Jamf package and push it to Christine's laptop", then "every employee would use this
+  potentially, so for anyone with a Mac I want it installed"): every release also carries `Wingman-<version>.pkg` and
+  `designated-requirement.txt`. The package is a `pkgbuild` component package that installs `Wingman.app` to `/Applications`;
+  its postinstall (`packaging/pkg-scripts/postinstall`) quits a stale running copy and launches the new one for the person at
+  the console through LaunchServices, never as root. It is unsigned (no Developer ID Installer certificate yet), which a Jamf
+  policy accepts and an MDM install command does not. The job installs the package on the runner as root and checks the copy in
+  `/Applications` before anything is released. The PPPC profile grants Accessibility by the code requirement in
+  `designated-requirement.txt` (`identifier "io.forit.wingman" and certificate root = H"d7c3…"`) and lets standard users approve
+  Screen Recording; Microphone and Speech Recognition cannot be pre-granted by MDM, so each person approves those once. The
+  for-Jamf session owns the policy and its scope (Christine's laptop first, then every ForIT Mac). Decision `.ai/decisions.md` 008.
 - Decision log: `.ai/decisions.md`. Dependency inventory: `docs/UPSTREAM-DEPENDENCIES.md`. Permissions: `docs/PERMISSIONS.md`.

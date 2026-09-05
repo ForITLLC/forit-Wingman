@@ -1,0 +1,17 @@
+#!/bin/sh
+# Runs as root after Installer (or a Jamf policy) has copied Wingman.app into /Applications.
+# Launch Wingman for the person at the console so the menu bar icon appears now rather than
+# at their next login. The app registers itself as a login item on its first launch, so this
+# is only needed once per Mac. Nothing here may fail the install: the app is on disk either way.
+consoleUser=$(/usr/bin/stat -f "%Su" /dev/console)
+if [ -z "$consoleUser" ] || [ "$consoleUser" = "root" ] || [ "$consoleUser" = "loginwindow" ]; then
+  exit 0
+fi
+consoleUserId=$(/usr/bin/id -u "$consoleUser")
+# A copy that was running while the bundle was replaced underneath it is stale; quit it first.
+/usr/bin/pkill -x Wingman || true
+/bin/sleep 1
+# Launch through LaunchServices as the console user, never as root: macOS keys the microphone
+# and screen recording checks to the process that started the app.
+/bin/launchctl asuser "$consoleUserId" /usr/bin/sudo -u "$consoleUser" /usr/bin/open -b io.forit.wingman || true
+exit 0

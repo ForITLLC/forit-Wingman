@@ -381,3 +381,51 @@ Relaunch); nothing is installed silently.
   switch to a Developer ID is one more manual install and one more grant of each permission.
 - Each running Wingman fetches `appcast.xml` from raw.githubusercontent.com once an hour. No ForIT
   service is involved and nothing about the person is sent.
+
+### Outcome (2026-09-05)
+
+Proven the same morning, and more silent than the decision expected. Ben's MacBook was running 0.1.41
+with `SUAutomaticallyUpdate` set (Sparkle's own "automatically download and install" box). It downloaded
+0.1.45 in the background at 06:09Z and installed it at the 06:11Z quit, then did the same for 0.1.48
+between 06:15Z and 06:20Z, each time with the Autoupdate log line "OK: EdDSA signature is correct for
+update" and no prompt at all. All three permission grants survived both installs. So "installing stays
+Sparkle's standard prompt" holds only for a Mac where that box is unticked; with it ticked, a release
+reaches a running Wingman within the hour and lands at the next quit. Sparkle also warns once per launch
+that this background app "does not implement gentle reminders": its scheduled alert can open behind other
+windows on a menu-bar-only app. Left as is; the gentle-reminder delegate hooks are the fix if anyone is
+ever left waiting on an alert they cannot see.
+
+## 008 — Jamf distribution: an unsigned installer package on every release
+
+### Context
+
+Ben, 2026-09-05: "Can you make this a Jamf package and push it to Christine's laptop? Talk with for-Jamf to
+coordinate that." Then: "it's not the support group that would use this. Every employee would use this
+potentially. So for anyone with a Mac I want it installed." Until now a Mac got Wingman only from a DMG a
+person dragged into `/Applications` (right-click, Open, because the interim certificate is not a Developer
+ID), which does not scale past Ben's own machines.
+
+### Decision
+
+The release job builds `Wingman-<version>.pkg` with `pkgbuild` next to the DMG and attaches both, plus
+`designated-requirement.txt`, to the GitHub release. The package is a component package for
+`/Applications/Wingman.app` with one postinstall script that quits a stale running copy and launches the
+new one for the console user through LaunchServices. It is unsigned: there is no Developer ID Installer
+certificate, and Jamf documents that packages deployed by a policy need no signature (only packages sent
+through an MDM install command, such as a PreStage enrollment package, must be signed). The job proves the
+package by installing it on the runner as root and checking the copy in `/Applications`.
+
+The Jamf side (uploading the package, the PPPC profile, the policy and its scope) belongs to the for-Jamf
+session; this repo only makes the artifacts. The PPPC profile grants Accessibility by the designated
+requirement (`identifier "io.forit.wingman" and certificate root = H"d7c3a46d58542739ca68ac152fda8f10f0c674df"`)
+and sets Screen Recording so a standard user can approve it. Microphone and Speech Recognition cannot be
+allowed by MDM at all, so each person approves those once on first use.
+
+### Consequences
+
+- A Mac that gets Wingman from the policy never sees Gatekeeper: `installer` runs as root and adds no
+  quarantine attribute, so the interim certificate is enough. Sparkle then keeps that copy current (007).
+- When a ForIT Developer ID arrives, the package should be signed with the matching Developer ID Installer
+  certificate and notarised, which also unlocks MDM install commands; until then a policy is the only route.
+- Scope starts as Christine's laptop and grows to every ForIT Mac. Sign-in stays the person's ForIT Entra
+  account with no group restriction, so nothing in the app changes per person.
