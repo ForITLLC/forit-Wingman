@@ -180,5 +180,5 @@ Do NOT update this file for minor edits, bug fixes, or changes that don't affect
 - Sparkle feed is `https://raw.githubusercontent.com/ForITLLC/forit-Wingman/main/appcast.xml`; the EdDSA private key
   is the `SPARKLE_PRIVATE_KEY` repo secret and the matching public key is in `Info.plist`. The updater start is still
   commented out in `WingmanApp.swift` (upstream state) until the first signed release is verified.
-- CI: `.github/workflows/ci.yml` (jobs `test` and `build`), ad-hoc signed, unsigned DMG artifacts, GitHub release on main.
+- CI: `.github/workflows/ci.yml` (jobs `test` and `build`), ad-hoc signed, unsigned DMG artifacts, GitHub release on main. The Release build passes `ENABLE_HARDENED_RUNTIME=NO`: an ad-hoc signature has no Team ID, so with the hardened runtime on, library validation rejects the embedded Sparkle framework and the app dies in dyld at launch (found 2026-09-05). The job launches the built app and requires it to stay up for eight seconds. Turn the hardened runtime back on when the build is signed with a ForIT Developer ID.
 - Decision log: `.ai/decisions.md`. Dependency inventory: `docs/UPSTREAM-DEPENDENCIES.md`. Permissions: `docs/PERMISSIONS.md`.

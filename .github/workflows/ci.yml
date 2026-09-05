@@ -75,6 +75,12 @@ jobs:
       - name: Resolve Swift packages
         run: xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme "$SCHEME"
 
+      # ENABLE_HARDENED_RUNTIME=NO is deliberate while the build is ad-hoc signed. The hardened
+      # runtime turns on library validation, which only accepts libraries signed by the same
+      # Team ID; an ad-hoc signature has no Team ID, so dyld refused the embedded
+      # Sparkle.framework and every DMG from this job crashed at launch with "Library missing"
+      # (2026-09-05, macOS 27 on Ben's MacBook). Put the hardened runtime back on when the
+      # build is signed with a ForIT Developer ID, which is also what notarisation needs.
       - name: Build Release (ad-hoc signed, no Apple team)
         run: |
           set -o pipefail
@@ -88,6 +94,7 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=YES \
+            ENABLE_HARDENED_RUNTIME=NO \
             DEVELOPMENT_TEAM= \
             MARKETING_VERSION="$APP_VERSION" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
@@ -102,7 +109,27 @@ jobs:
           grep -qx "io.forit.wingman" build/bundle-id.txt
           /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Print CFBundleName" "$APP/Contents/Info.plist" | grep -qx "Wingman"
-          codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature" || true
+          codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature|flags" || true
+          codesign --verify --deep --strict "$APP"
+
+      # The app must survive dyld: launch the built binary and require it to still be alive
+      # eight seconds later. A signing or embedding mistake (the Sparkle case above) kills the
+      # process within the first second, before any UI, so this catches it without a display.
+      - name: Launch smoke test (the app must stay up for 8 seconds)
+        run: |
+          APP=build/DerivedData/Build/Products/Release/Wingman.app
+          "$APP/Contents/MacOS/Wingman" > build/launch-smoke.log 2>&1 &
+          WINGMAN_PID=$!
+          sleep 8
+          if kill -0 "$WINGMAN_PID" 2>/dev/null; then
+            echo "Wingman stayed up for 8 seconds (pid $WINGMAN_PID)"
+            kill "$WINGMAN_PID" || true
+          else
+            echo "Wingman exited within 8 seconds of launch"
+            cat build/launch-smoke.log
+            ls -t ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i wingman | head -1 | xargs -I{} sh -c 'head -c 4000 ~/Library/Logs/DiagnosticReports/{}' || true
+            exit 1
+          fi
 
       - name: Package DMG
         id: dmg
