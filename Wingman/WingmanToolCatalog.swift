@@ -71,6 +71,21 @@ enum WingmanToolCatalog {
     static let listTicketsToolName = "support_listTickets"
     static let addTicketNoteToolName = "support_addTicketNote"
     static let searchFlightsToolName = "forit_avops_search_flights"
+    static let searchKnowledgeBaseToolName = "support_searchKbArticles"
+    static let readKnowledgeBaseArticleToolName = "support_getKbArticle"
+
+    /// Knowledge base searches default to ForIT's own tenant, where the FL3XX and internal how-to
+    /// articles live. A client's slug (for example planet-nine) searches that client's articles
+    /// plus the global ones instead. The default is applied here, not left to the gateway, so a
+    /// search with no tenant can never widen to "every tenant" if the API's default changes.
+    static let defaultKnowledgeBaseTenantSlug = "forit"
+    static let maximumKnowledgeBaseSearchResults = 10
+    static let defaultKnowledgeBaseSearchResults = 5
+
+    /// An article body longer than this is cut before it reaches the model. The relay caps a tool
+    /// result at 64 KB, and a spoken answer never needs more than the first few thousand words.
+    static let maximumKnowledgeBaseArticleCharacters = 12_000
+    static let knowledgeBaseArticleTruncationNotice = "\n\n[article cut here by Wingman; the url has the rest]"
 
     static let tools: [WingmanToolDescriptor] = [
         WingmanToolDescriptor(
@@ -123,11 +138,49 @@ enum WingmanToolCatalog {
             ],
             minimumAccessLevel: .viewer
         ),
+        WingmanToolDescriptor(
+            name: searchKnowledgeBaseToolName,
+            description: "Search the ForIT support knowledge base: how-to and reference articles for the systems ForIT supports, including FL3XX (the flight operations and scheduling platform) and ForIT's own products. Call this before answering any \"how do I\", \"where is\", \"why does\" or setup question about FL3XX or another supported system; never describe a procedure from memory. Returns the best-matching published articles with article_id, title, summary and a link. Then read the best match with \(readKnowledgeBaseArticleToolName) before answering.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "q": ["type": "string", "description": "What the user wants to know, as a few keywords, e.g. \"TSA secure flight activation\" or \"crew duty limits\"."],
+                    "tenant": ["type": "string", "description": "Tenant slug whose articles to search. Omit for ForIT's own knowledge base (\(defaultKnowledgeBaseTenantSlug)), which holds the FL3XX articles; give a client's slug only when the user asks about that client's own procedures."],
+                    "limit": ["type": "integer", "description": "Results, 1 to \(maximumKnowledgeBaseSearchResults). Default \(defaultKnowledgeBaseSearchResults)."],
+                ],
+                "required": ["q"],
+            ],
+            minimumAccessLevel: .viewer
+        ),
+        WingmanToolDescriptor(
+            name: readKnowledgeBaseArticleToolName,
+            description: "Read one knowledge base article in full, by the article_id from \(searchKnowledgeBaseToolName). Answer from the article's steps in your own words and name the article so the user can open it.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "articleId": ["type": "string", "description": "The article_id (UUID) from \(searchKnowledgeBaseToolName)."],
+                ],
+                "required": ["articleId"],
+            ],
+            minimumAccessLevel: .viewer
+        ),
     ]
 
     /// What the model is told it can call. Nothing outside `tools` ever appears here.
     static var modelToolDefinitions: [[String: Any]] {
         tools.map { $0.modelDefinition }
+    }
+
+    /// The definitions to send for one turn: the catalog narrowed to what the gateway's `tools/list`
+    /// exposes to this user. A catalog tool the gateway does not have (the knowledge base tools before
+    /// for-Support ships them, say) is left out, so the model is never offered a tool that can only
+    /// fail. nil means the list could not be fetched. If nothing overlaps, the list is taken to be
+    /// wrong (an empty answer, a different manifest) and the whole catalog is offered.
+    static func modelToolDefinitions(exposedByGateway gatewayToolNames: Set<String>?) -> [[String: Any]] {
+        guard let gatewayToolNames else { return modelToolDefinitions }
+        let exposedTools = tools.filter { gatewayToolNames.contains($0.name) }
+        guard !exposedTools.isEmpty else { return modelToolDefinitions }
+        return exposedTools.map { $0.modelDefinition }
     }
 
     static func descriptor(named toolName: String) -> WingmanToolDescriptor? {
@@ -156,6 +209,10 @@ enum WingmanToolCatalog {
             )
         case searchFlightsToolName:
             return WingmanPreparedToolCall(toolName: toolName, arguments: prepareSearchFlightsArguments(modelArguments))
+        case searchKnowledgeBaseToolName:
+            return WingmanPreparedToolCall(toolName: toolName, arguments: try prepareSearchKnowledgeBaseArguments(modelArguments))
+        case readKnowledgeBaseArticleToolName:
+            return WingmanPreparedToolCall(toolName: toolName, arguments: try prepareReadKnowledgeBaseArticleArguments(modelArguments))
         default:
             throw WingmanToolRefusal.notOnAllowList(toolName: toolName)
         }
@@ -237,6 +294,24 @@ enum WingmanToolCatalog {
         return gatewayArguments
     }
 
+    private static func prepareSearchKnowledgeBaseArguments(_ modelArguments: [String: Any]) throws -> [String: Any] {
+        guard let searchText = nonEmptyString(modelArguments["q"]) else {
+            throw WingmanToolRefusal.invalidArguments(toolName: searchKnowledgeBaseToolName, reason: "q (what to search for) is required.")
+        }
+        var gatewayArguments: [String: Any] = ["q": searchText]
+        gatewayArguments["tenant"] = nonEmptyString(modelArguments["tenant"])?.lowercased() ?? defaultKnowledgeBaseTenantSlug
+        let requestedLimit = integerValue(modelArguments["limit"]) ?? defaultKnowledgeBaseSearchResults
+        gatewayArguments["limit"] = min(max(requestedLimit, 1), maximumKnowledgeBaseSearchResults)
+        return gatewayArguments
+    }
+
+    private static func prepareReadKnowledgeBaseArticleArguments(_ modelArguments: [String: Any]) throws -> [String: Any] {
+        guard let articleId = nonEmptyString(modelArguments["articleId"]) else {
+            throw WingmanToolRefusal.invalidArguments(toolName: readKnowledgeBaseArticleToolName, reason: "articleId is required; find the article with \(searchKnowledgeBaseToolName) first.")
+        }
+        return ["articleId": articleId]
+    }
+
     // MARK: - Result condensing
 
     /// Fields of a ticket the model needs to answer or draft. Everything else the gateway
@@ -247,36 +322,90 @@ enum WingmanToolCatalog {
         "created_at", "updated_at", "last_message_at", "last_message_by", "sla_due_at", "sla_breached_at", "ai_summary",
     ]
 
+    /// Fields of a knowledge base article the model needs to pick one and cite it. The body is
+    /// handled separately: search results never carry it, a read carries it capped.
+    private static let knowledgeBaseArticleFieldsKeptForModel = [
+        "article_id", "title", "slug", "summary", "ai_summary", "category_name", "tenant_slug", "is_global", "tags", "updated_at", "url",
+    ]
+
     /// Reduces a gateway tool result to what the model needs. Unknown shapes pass through
     /// untouched, so a gateway change never makes a tool unusable.
     static func condenseResult(toolName: String, resultText: String) -> String {
-        guard toolName == listTicketsToolName,
-              let resultData = resultText.data(using: .utf8),
-              let resultObject = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any],
-              let tickets = resultObject["tickets"] as? [[String: Any]] else {
+        switch toolName {
+        case listTicketsToolName:
+            return condenseTicketListResult(resultText) ?? resultText
+        case searchKnowledgeBaseToolName:
+            return condenseKnowledgeBaseSearchResult(resultText) ?? resultText
+        case readKnowledgeBaseArticleToolName:
+            return condenseKnowledgeBaseArticleResult(resultText) ?? resultText
+        default:
             return resultText
         }
+    }
 
-        let condensedTickets: [[String: Any]] = tickets.map { ticket in
-            var condensedTicket: [String: Any] = [:]
-            for fieldName in ticketFieldsKeptForModel {
-                if let value = ticket[fieldName], !(value is NSNull) {
-                    condensedTicket[fieldName] = value
-                }
-            }
-            return condensedTicket
+    private static func condenseTicketListResult(_ resultText: String) -> String? {
+        guard let resultObject = jsonObject(fromResultText: resultText),
+              let tickets = resultObject["tickets"] as? [[String: Any]] else {
+            return nil
         }
-
+        let condensedTickets = tickets.map { keepFields(ticketFieldsKeptForModel, of: $0) }
         var condensedResult: [String: Any] = ["tickets": condensedTickets]
         if let pagination = resultObject["pagination"] {
             condensedResult["pagination"] = pagination
         }
+        return jsonText(fromResultObject: condensedResult)
+    }
 
-        guard let condensedData = try? JSONSerialization.data(withJSONObject: condensedResult, options: [.sortedKeys]),
-              let condensedText = String(data: condensedData, encoding: .utf8) else {
-            return resultText
+    private static func condenseKnowledgeBaseSearchResult(_ resultText: String) -> String? {
+        guard let resultObject = jsonObject(fromResultText: resultText),
+              let articles = resultObject["articles"] as? [[String: Any]] else {
+            return nil
         }
-        return condensedText
+        let condensedArticles = articles.map { keepFields(knowledgeBaseArticleFieldsKeptForModel, of: $0) }
+        var condensedResult: [String: Any] = ["articles": condensedArticles]
+        for fieldName in ["tenant", "total"] {
+            if let value = resultObject[fieldName], !(value is NSNull) {
+                condensedResult[fieldName] = value
+            }
+        }
+        return jsonText(fromResultObject: condensedResult)
+    }
+
+    private static func condenseKnowledgeBaseArticleResult(_ resultText: String) -> String? {
+        guard let resultObject = jsonObject(fromResultText: resultText),
+              let article = resultObject["article"] as? [String: Any] else {
+            return nil
+        }
+        var condensedArticle = keepFields(knowledgeBaseArticleFieldsKeptForModel, of: article)
+        // Plain text reads better aloud than the stored HTML or markdown; fall back to the stored
+        // body when the plain rendering is missing.
+        let articleBody = nonEmptyString(article["content_plain"]) ?? nonEmptyString(article["content"]) ?? ""
+        if articleBody.count > maximumKnowledgeBaseArticleCharacters {
+            condensedArticle["content"] = String(articleBody.prefix(maximumKnowledgeBaseArticleCharacters)) + knowledgeBaseArticleTruncationNotice
+        } else {
+            condensedArticle["content"] = articleBody
+        }
+        return jsonText(fromResultObject: ["article": condensedArticle])
+    }
+
+    private static func keepFields(_ fieldNames: [String], of sourceObject: [String: Any]) -> [String: Any] {
+        var keptObject: [String: Any] = [:]
+        for fieldName in fieldNames {
+            if let value = sourceObject[fieldName], !(value is NSNull) {
+                keptObject[fieldName] = value
+            }
+        }
+        return keptObject
+    }
+
+    private static func jsonObject(fromResultText resultText: String) -> [String: Any]? {
+        guard let resultData = resultText.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: resultData) as? [String: Any]
+    }
+
+    private static func jsonText(fromResultObject resultObject: [String: Any]) -> String? {
+        guard let resultData = try? JSONSerialization.data(withJSONObject: resultObject, options: [.sortedKeys]) else { return nil }
+        return String(data: resultData, encoding: .utf8)
     }
 
     // MARK: - Argument coercion

@@ -75,24 +75,50 @@ final class WingmanGatewayToolClient {
     // MARK: - Public
 
     func callTool(named toolName: String, arguments: [String: Any]) async throws -> WingmanGatewayToolResult {
+        let response = try await sendJSONRPCRecoveringLostSession(method: "tools/call", params: ["name": toolName, "arguments": arguments])
+        return try Self.toolResult(fromJSONRPCResponse: response)
+    }
+
+    /// The names of every tool the gateway exposes to this user (`tools/list`, all pages). The
+    /// caller uses it to leave catalog tools the gateway does not have out of the model's tool
+    /// list; a failure here is the caller's to absorb, not a reason to fail a spoken question.
+    func listToolNames() async throws -> Set<String> {
+        var toolNames = Set<String>()
+        var cursor: String?
+        // A gateway that kept handing out cursors would otherwise loop forever; no real one has
+        // anywhere near this many pages.
+        for _ in 0..<20 {
+            var params: [String: Any] = [:]
+            if let cursor {
+                params["cursor"] = cursor
+            }
+            let response = try await sendJSONRPCRecoveringLostSession(method: "tools/list", params: params)
+            let page = try Self.toolsListPage(fromJSONRPCResponse: response)
+            toolNames.formUnion(page.toolNames)
+            guard let nextCursor = page.nextCursor else { break }
+            cursor = nextCursor
+        }
+        return toolNames
+    }
+
+    // MARK: - MCP session
+
+    /// Initialises the MCP session on first use and, when the gateway has forgotten the session
+    /// (restart, scale-out: a 404 on a request that carried our session id), starts over once.
+    private func sendJSONRPCRecoveringLostSession(method: String, params: [String: Any]) async throws -> [String: Any] {
         if !hasInitialized {
             try await initializeSession()
         }
 
         do {
-            let response = try await sendJSONRPC(method: "tools/call", params: ["name": toolName, "arguments": arguments])
-            return try Self.toolResult(fromJSONRPCResponse: response)
+            return try await sendJSONRPC(method: method, params: params)
         } catch WingmanGatewayToolError.gatewayRejected(let statusCode, _) where statusCode == 404 && mcpSessionId != nil {
-            // The gateway forgot our session (restart, scale-out). Start over once.
             hasInitialized = false
             mcpSessionId = nil
             try await initializeSession()
-            let response = try await sendJSONRPC(method: "tools/call", params: ["name": toolName, "arguments": arguments])
-            return try Self.toolResult(fromJSONRPCResponse: response)
+            return try await sendJSONRPC(method: method, params: params)
         }
     }
-
-    // MARK: - MCP session
 
     private func initializeSession() async throws {
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
@@ -263,6 +289,18 @@ final class WingmanGatewayToolClient {
             throw WingmanGatewayToolError.invalidResponse(detail: "event stream carried no JSON-RPC response")
         }
         return responseObject
+    }
+
+    /// Reads one page of a `tools/list` result: the tool names on it and the cursor of the next
+    /// page, nil on the last page.
+    static func toolsListPage(fromJSONRPCResponse jsonRPCResponse: [String: Any]) throws -> (toolNames: [String], nextCursor: String?) {
+        guard let result = jsonRPCResponse["result"] as? [String: Any] else {
+            throw WingmanGatewayToolError.invalidResponse(detail: "tools/list response has no result")
+        }
+        let toolEntries = result["tools"] as? [[String: Any]] ?? []
+        let toolNames = toolEntries.compactMap { $0["name"] as? String }
+        let nextCursor = result["nextCursor"] as? String
+        return (toolNames, (nextCursor?.isEmpty ?? true) ? nil : nextCursor)
     }
 
     /// Reads a `tools/call` result: the text blocks joined, and MCP's `isError` flag.

@@ -100,6 +100,13 @@ final class CompanionManager: ObservableObject {
     /// it has. Listing, then looking one ticket up, then drafting is three.
     private static let maximumToolRoundsPerTurn = 4
 
+    /// What the gateway's `tools/list` exposed to the signed-in person, which account it was fetched
+    /// for, and when. nil until the first successful fetch; see `toolDefinitionsForThisTurn`.
+    private var gatewayExposedToolNames: Set<String>?
+    private var gatewayExposedToolNamesAccountEmail: String?
+    private var gatewayExposedToolNamesFetchedAt: Date?
+    private static let gatewayToolListMaximumAge: TimeInterval = 15 * 60
+
     /// Conversation history so Claude remembers prior exchanges within a session.
     /// Each entry is the user's transcript and Claude's response.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
@@ -511,10 +518,12 @@ final class CompanionManager: ObservableObject {
     - if you receive multiple screen images, the one labeled "primary focus" is where the cursor is — prioritize that one but reference others if relevant.
 
     forit support:
-    you also work the forit help desk alongside the signed-in staff member, and you have three tools. they are the only way you know anything about tickets or flights: never guess a ticket, a status, a summary or a flight from memory or from the screenshot alone when a tool can answer.
+    you also work the forit help desk alongside the signed-in staff member, and you have a handful of tools. they are the only way you know anything about tickets, flights or how a supported system works: never guess a ticket, a status, a summary, a flight or a procedure from memory or from the screenshot alone when a tool can answer.
     - support_listTickets lists tickets. filter by tenant slug for a client (forit, gna, wma and so on), status "active" for open work, or search by ticket number. ticket numbers look like "FI-000227"; the user will usually say just the digits ("two twenty seven"), so search those digits and pick the ticket whose number ends with them. search also matches subject words, so ignore hits whose number doesn't match.
     - support_addTicketNote saves a draft reply on a ticket as an internal note. use it when the user asks you to draft a reply or a response. write the reply itself as the content, addressed to the requester, in a professional tone and normal capitalisation (this is written, not spoken). the app marks it "DRAFT (Wingman):" and it is never sent; afterwards tell the user the draft is on the ticket as an internal note for them to review and send.
     - forit_avops_search_flights answers any flight question for the airline ops tenant: today's schedule, delays, cancellations, a specific flight or airport.
+    - support_searchKbArticles searches the forit knowledge base, which holds the fl3xx articles (fl3xx is the flight operations and scheduling platform forit supports) and forit's own how-tos. any "how do i", "where is", "why does" or setup question about fl3xx or another supported system starts here, then support_getKbArticle reads the best match in full. answer from the article in your own words, name the article so they can open it, and keep to the steps that matter. if nothing relevant comes back, say the knowledge base has nothing on it yet and stop there: never invent a fl3xx procedure, menu, setting or field.
+    - if a tool named here is missing from your tool list, that part isn't connected yet: say so instead of answering as if you had looked.
     you cannot send replies, close, assign, delete or bulk-update tickets, or change user accounts. if asked, say the draft or the note is as far as you go and the staff member finishes it in the support portal.
     when summarising a ticket say who raised it, what it is about, its status and what is blocking it, in a sentence or two. for a list give the count and the two or three that matter most (breached or nearest sla, highest priority), not every ticket. say ticket numbers as digits, like "ticket two twenty seven". a tool error means you say what failed; never invent the answer.
 
@@ -717,7 +726,7 @@ final class CompanionManager: ObservableObject {
             "content": ClaudeAPI.userMessageContentBlocks(images: labeledImages, userPrompt: transcript)
         ])
 
-        let toolDefinitions = WingmanToolCatalog.modelToolDefinitions
+        let toolDefinitions = await toolDefinitionsForThisTurn()
 
         for _ in 0..<Self.maximumToolRoundsPerTurn {
             let streamedTurn = try await claudeAPI.streamTurn(
@@ -767,6 +776,34 @@ final class CompanionManager: ObservableObject {
             onTextChunk: { _ in }
         )
         return finalTurn.text
+    }
+
+    /// The tool definitions for this turn: the catalog narrowed to what the gateway's `tools/list`
+    /// exposes to the signed-in person. The list is cached per account and refreshed after
+    /// `gatewayToolListMaximumAge`, so a tool for-Support ships later shows up without restarting
+    /// the app. A failed `tools/list` is logged and the whole catalog is offered instead, so a
+    /// gateway hiccup costs at most a "that failed" on one tool, never the spoken question.
+    private func toolDefinitionsForThisTurn() async -> [[String: Any]] {
+        let signedInEmail = signInManager.signedInAccount?.emailAddress
+        let cachedListIsForThisAccount = gatewayExposedToolNamesAccountEmail == signedInEmail
+        let cachedListIsFresh = gatewayExposedToolNamesFetchedAt.map { Date().timeIntervalSince($0) < Self.gatewayToolListMaximumAge } ?? false
+
+        if gatewayExposedToolNames == nil || !cachedListIsForThisAccount || !cachedListIsFresh {
+            do {
+                let exposedToolNames = try await gatewayToolClient.listToolNames()
+                gatewayExposedToolNames = exposedToolNames
+                gatewayExposedToolNamesAccountEmail = signedInEmail
+                gatewayExposedToolNamesFetchedAt = Date()
+                let hiddenToolNames = WingmanToolCatalog.tools.map(\.name).filter { !exposedToolNames.contains($0) }
+                if !hiddenToolNames.isEmpty {
+                    print("ℹ️ Gateway does not expose \(hiddenToolNames.joined(separator: ", ")); not offered to the model")
+                }
+            } catch {
+                print("⚠️ Gateway tools/list failed, offering the whole catalog: \(error)")
+            }
+        }
+
+        return WingmanToolCatalog.modelToolDefinitions(exposedByGateway: gatewayExposedToolNames)
     }
 
     /// Applies the app-side policy (allow-list, argument rewriting) and calls the gateway.

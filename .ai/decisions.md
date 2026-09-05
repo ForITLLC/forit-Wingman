@@ -172,3 +172,59 @@ Option 2, with deterministic app-side policy in `WingmanToolCatalog`:
   a stale tool result is never reasoned from twice; the spoken reply is what the model remembers.
 - A gateway or protocol change shows up as an error `tool_result` the model reads aloud ("that
   failed"), not as an invented answer.
+
+## 003 — FL3XX and how-to questions are answered from the for-Support knowledge base, read through two gateway tools the app hides until they exist
+
+### Context
+
+Ben (2026-09-04): "Get those ready to answer Flex questions" and "the integration with support is the key
+part". Staff asking Wingman how to do something in FL3XX (the flight operations platform ForIT supports;
+Planet Nine Private Air is the first FL3XX operator) must get the ForIT-curated procedure, not a model's
+recollection of FL3XX. The knowledge base already lives in for-Support (`kb_articles`, per tenant plus
+global articles, published/draft, `content` + `content_plain`), but it has no read route a bearer token can
+call, the gateway has no `support_*` KB tool, and the `forit` tenant holds no FL3XX article yet. The
+`for-FL3XX` repo holds a 443-page markdown mirror of FL3XX's public help centre and a 315-page mirror of its
+developer portal. Ben scoped the first cut: "let's scope to forit for now but we'd basically put this
+planet 9 scoped".
+
+### Options considered
+
+1. **Ship the FL3XX corpus inside the app or the relay** (embed the mirror, or a vector index of it).
+   Puts FL3XX's text in a build artefact, bypasses the support team's editing and publishing flow, and
+   drifts from whatever ForIT actually tells clients.
+2. **A new "AI harness" service that indexes the KB and answers questions.** Another service to own,
+   another identity, and the tool loop the app already runs is exactly that harness.
+3. **Two read-only tools on the gateway backed by two for-Support admin routes (chosen).** The app
+   searches, then reads one article, and answers from it. Content stays where support staff edit it.
+
+### Decision
+
+Option 3.
+
+- **for-Support** adds `GET /api/admin/kb/search` (new) and opens the existing `GET /api/admin/kb/{articleId}`
+  to bearer callers, both in `openapi.json` with operationIds `searchKbArticles` / `getKbArticle`; the
+  gateway mounts them as `support_searchKbArticles` / `support_getKbArticle` from the spec with no gateway
+  code. Contract: `docs/common-proposed/for-support-kb-read-api.md`.
+- **The app** describes both tools to the model (`WingmanToolCatalog`, Viewer level). Search always carries a
+  tenant: the model's, lower-cased, or `forit` when it gave none, so a search can never widen to every
+  tenant. Article bodies are cut at 12,000 characters before the model sees them.
+- **The catalog is narrowed to the gateway's `tools/list`** per account (cached 15 minutes). Until
+  for-Support ships, the KB tools are simply not offered and the prompt tells the model to say that part is
+  not connected. When the routes land and for-mcp refreshes its spec, they appear without an app release.
+- **The prompt** makes the KB the first stop for any "how do I / where is / why does" question about FL3XX or
+  another supported system, requires naming the article, and forbids inventing an FL3XX procedure when the
+  search comes back empty.
+- **Content** is a for-Support / Ben matter, not an app one: seeding the `forit` tenant from the
+  `for-FL3XX` mirror (staff-facing, attributed to the FL3XX source URL each page carries) is proposed in the
+  same document and waits for Ben's yes, because the text is FL3XX's.
+
+### Consequences
+
+- No FL3XX text, index or vendor key enters the app or the relay; the relay still forwards blocks only.
+- A tenant-scoped KB is one argument away: Planet Nine's own articles are searched with `tenant: planet-nine`
+  once that tenant exists in for-Support (it does not today; the six tenants are cayres-inc, connect, forit,
+  great-north, wma, xceljet).
+- The model can cite ("the article How to activate TSA Secure Flight says…") because search results carry
+  `title` and `url`; it cannot quote a draft because the search route returns published articles only.
+- The `tools/list` narrowing applies to every catalog tool, so a gateway that withdraws a tool stops it being
+  offered rather than producing "that failed" answers.
