@@ -21,6 +21,10 @@
 	<string>https://raw.githubusercontent.com/ForITLLC/forit-Wingman/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>bxZ14qteZ45IVpxR8KL2CusN3rIuH7AYkPVFQ/QLtzU=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Wingman uses your microphone while you hold the hot key so you can talk to it</string>
 	<key>NSScreenCaptureUsageDescription</key>

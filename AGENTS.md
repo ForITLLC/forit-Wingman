@@ -184,8 +184,12 @@ Do NOT update this file for minor edits, bug fixes, or changes that don't affect
 - Removed from upstream: PostHog SDK, FormSpark email capture, the hosted Mux intro video, the "DM Farza" button,
   bundled game-soundtrack mp3s, the Codex/makesomething image sets, per-user `xcuserdata`, `scripts/release.sh`.
 - Sparkle feed is `https://raw.githubusercontent.com/ForITLLC/forit-Wingman/main/appcast.xml`; the EdDSA private key
-  is the `SPARKLE_PRIVATE_KEY` repo secret and the matching public key is in `Info.plist`. The updater start is still
-  commented out in `WingmanApp.swift` (upstream state) until the first signed release is verified.
+  is the `SPARKLE_PRIVATE_KEY` repo secret and the matching public key is in `Info.plist`. Since 2026-09-05 the updater
+  starts at launch (`startSparkleUpdater()` in `WingmanApp.swift`; Ben: "Why are you suddenly asking me to install this?"):
+  `SUEnableAutomaticChecks` is on so Sparkle never asks permission to check, and `SUScheduledCheckInterval` is 3600 s so a
+  fix reaches a running Wingman within the hour. Installing is still Sparkle's own prompt, never silent. The first build
+  with the updater on is the last manual install; the update path is proven only by a later release arriving through it,
+  not by the merge (decision `.ai/decisions.md` 007).
 - CI: `.github/workflows/ci.yml` (jobs `test` and `build`), DMG artifacts, GitHub release on main. Since 2026-09-05 the Release
   build is signed with an **interim self-signed certificate** held as the repo secrets `MACOS_SIGNING_P12_BASE64` and
   `MACOS_SIGNING_P12_PASSWORD` (ad-hoc when they are absent). macOS keys the Accessibility and Screen Recording grants to the
