@@ -6,7 +6,8 @@ Status: **implemented** (written in for-Wingman on 2026-09-05; for-Support shipp
 `tools/list` shows both tools, 25 → 27 `support_*`). Wingman ships the client side
 (`Wingman/WingmanToolCatalog.swift`, decision `.ai/decisions.md` 003) and only describes the two tools while
 the gateway's `tools/list` shows them. Sections below are the contract as agreed; the "Verification once
-shipped" section records what was checked.
+shipped" section records what was checked. The FL3XX content landed the same day (for-Support `f38e469`,
+346 articles, staff-only); see "Content".
 
 ## Why
 
@@ -67,7 +68,9 @@ Response `200`:
 
 No `content` / `content_plain` in search results (Wingman drops them anyway; not sending them keeps
 the gateway response small). `url` is the public article URL as for-Support builds it for that
-tenant; if the tenant has a custom host, use that host.
+tenant; if the tenant has a custom host, use that host. For an article with `visibility: internal`
+(staff-only, see "Content") `url` is the admin page instead, `https://support.forit.io/admin/kb/<article_id>`,
+and the search rows and the article carry `visibility` so the model can say the source is internal.
 
 ### 2. `GET /api/admin/kb/{articleId}` — exists, open it to bearer callers
 
@@ -122,14 +125,15 @@ Nine tenant exists in for-Support (there is none today; the six tenants are `cay
 `docs/PERMISSIONS.md` 5.1 applies here exactly as to tickets: until WO#1908 lands, a signed-in ForIT
 staff member can name any tenant; the routes themselves need no extra rule.
 
-## Content: the `forit` tenant has zero FL3XX articles today
+## Content: the `forit` tenant holds the 346-page FL3XX mirror, staff-only (imported 2026-09-05)
 
-Grep of the for-Support repo and a ticket search (`support_listTickets search=fl3xx`, 2026-09-05) both
-return nothing FL3XX. Without articles the tools work and the model correctly says "the knowledge base
-has nothing on that yet".
+Until the morning of 2026-09-05 the `forit` tenant held no FL3XX article (repo grep and
+`support_listTickets search=fl3xx` both empty); the tools worked and the model correctly said "the knowledge
+base has nothing on that yet". The import below landed that evening; the paragraphs that follow are the
+seed decision as it was made, and "Import result" records what shipped.
 
 Seed, **decided GO by Ben on 2026-09-05** ("for-fl3xx seeded no?" on top of "get those ready to answer Flex
-questions"), routed to for-Support through the Commander the same day and not yet imported: the `for-FL3XX` repo (session 39b72bf0d2b7432a,
+questions"), routed to for-Support through the Commander the same day and imported that evening (see "Import result"): the `for-FL3XX` repo (session 39b72bf0d2b7432a,
 `~/GitProjects/for-FL3XX`) holds `kb/fl3xx-knowledge-base/markdown/` — 442 markdown pages mirrored from
 `https://www.fl3xx.com/kb/…`, each starting with an H1 and a `Source:` line — and
 `kb/fl3xx-developer-portal/` (315 pages from `developer.fl3xx.com`). A one-off importer (for-Support side,
@@ -156,8 +160,25 @@ import with it; (2) the two bearer read routes above must return internal articl
 for an internal article (admin URL, or omit it). Proof from for-Support: the public slug URL is hidden or
 `404` and the gateway search returns the article. ForIT-written articles (ForIT's own FL3XX procedures for
 Planet Nine, gotchas, workarounds) remain the only ones that could ever be public. Wingman needs no change:
-it reads through the gateway only and passes `url` through unchanged. Nothing has been imported yet; the
-work order is with for-Support via the Commander (card 74DEAEBA).
+it reads through the gateway only and passes `url` through unchanged.
+
+### Import result (for-Support `f38e469`, 2026-09-05, card 74DEAEBA)
+
+for-Support reported 346 of 346 pages imported into tenant `forit`, category `FL3XX`, with a new
+`visibility = internal` value ("INTERNAL"), `url` pointing at the admin page, and its own public KB search
+returning zero rows for them. Re-verified from for-Wingman through the gateway, read-only, the same evening:
+
+| Check | Result |
+|-------|--------|
+| `support_searchKbArticles` `q=tsa` `tenant=forit` `limit=5` | `total: 10`, every row `category_name: FL3XX`, `visibility: internal`, `url: https://support.forit.io/admin/kb/<article_id>` |
+| `support_searchKbArticles` `q=fl3xx` `tenant=forit` | `total: 346` (the whole curated set) |
+| `support_getKbArticle` on "TSA Secure Flight Passenger Screening (New)" | `tenant_slug: forit`, `visibility: internal`, `status: published`, body 3,509 characters, title on the first line, slug `how-to-submit-passengers-for-tsa-screening-2024` |
+| Anonymous `GET https://support.forit.io/forit/kb/<that slug>`, `/forit/kb?q=tsa`, `/forit/kb` | `303` to the sign-in page; nothing renders without a session |
+
+So the constraint holds as far as this repo can see it: the gateway (staff, bearer) reads the articles, the
+public host shows nothing to an anonymous visitor, and the model is handed an admin URL, not a public one.
+Wingman needed no change: `visibility` is an extra field the app forwards in the condensed search rows only if
+present, and `url` passes through as before.
 
 ## Verification once shipped
 
@@ -175,9 +196,9 @@ work order is with for-Support via the Commander (card 74DEAEBA).
    through unchanged.
 3. **Done in part on Ben's Mac (2026-09-05).** A question about an existing `forit` article worked end to end:
    the model searched, read and spoke the Pax8 article (Ben: "it worked, it read the pax8 article"). Still to run
-   once the FL3XX import lands: in Wingman (signed in as ForIT staff): "how do I turn on TSA screening in
-   FL3XX" → the model calls search, then get, names the article, and does not describe steps the article does
-   not contain. With the KB as it is today the same question gets "the knowledge base has nothing on that yet".
+   now that the FL3XX import has landed (`f38e469`, see "Import result"): in Wingman (signed in as ForIT staff):
+   "how do I turn on TSA screening in FL3XX" → the model calls search, then get, names the article (the gateway
+   answers ten TSA articles for that search today), and does not describe steps the article does not contain.
 
 ## What Wingman already does with these
 

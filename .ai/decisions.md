@@ -220,7 +220,11 @@ Option 3.
   search comes back empty.
 - **Content** is a for-Support / Ben matter, not an app one: seeding the `forit` tenant from the
   `for-FL3XX` mirror (staff-facing, attributed to the FL3XX source URL each page carries) is proposed in the
-  same document and waits for Ben's yes, because the text is FL3XX's.
+  same document and waited for Ben's yes, because the text is FL3XX's. Ben said yes on 2026-09-05 with the
+  constraint "nothing should be public"; for-Support imported the 346-page curated set the same day
+  (`f38e469`) as staff-only articles (`visibility: internal`, admin-page `url`, absent from the public KB),
+  and the gateway returns them to a bearer caller (re-verified from this repo: `q=tsa` → 10, `q=fl3xx` → 346).
+  No app change was needed for the content to appear.
 
 ### Consequences
 
@@ -229,7 +233,8 @@ Option 3.
   once that tenant exists in for-Support (it does not today; the six tenants are cayres-inc, connect, forit,
   great-north, wma, xceljet).
 - The model can cite ("the article How to activate TSA Secure Flight says…") because search results carry
-  `title` and `url`; it cannot quote a draft because the search route returns published articles only.
+  `title` and `url`; it cannot quote a draft because the search route returns published articles only. For the
+  FL3XX mirror the `url` is the support admin page, so a citation never points a client at the internal copy.
 - The `tools/list` narrowing applies to every catalog tool, so a gateway that withdraws a tool stops it being
   offered rather than producing "that failed" answers.
 
