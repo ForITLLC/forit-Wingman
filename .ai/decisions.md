@@ -343,3 +343,32 @@ relay.
   concern and is not designed here.
 - Adding a term changes the system prompt, which invalidates the relay's Anthropic prompt cache once
   per change; the prompt is otherwise stable.
+
+## 007 — The Sparkle updater is on; the build that carries it is the last manual install
+
+### Context
+
+Ben, 2026-09-05: "Why are you suddenly asking me to install this?" Every change since the fork has reached
+his Mac only as a DMG he installs by hand, because the updater start was commented out in
+`WingmanApp.swift`, carried over from upstream with the note that it stays off until the first signed
+release is verified. 0.1.31 and 0.1.33 are signed with the interim certificate (005), the appcast on
+`main` holds an EdDSA-signed entry for every release, and the CI launch smoke test runs on every build.
+
+### Decision
+
+`startSparkleUpdater()` runs at launch. `SUEnableAutomaticChecks` is set in `Info.plist` so Sparkle checks
+without first asking the person for permission, and `SUScheduledCheckInterval` is 3600 seconds so a fix
+reaches a running Wingman within the hour. Installing stays Sparkle's standard prompt (Install and
+Relaunch); nothing is installed silently.
+
+### Consequences
+
+- One more manual install: the build that carries this decision. The copy on a Mac before it has no
+  updater, so nothing can move it.
+- The update path is proven only when a later release arrives through it. The evidence is that release
+  running on the Mac and Sparkle's own log lines, not the merge or the CI run.
+- Both bundles are signed with the same interim certificate, so the new bundle satisfies the running
+  app's designated requirement and the Accessibility and Screen Recording grants survive (005). A later
+  switch to a Developer ID is one more manual install and one more grant of each permission.
+- Each running Wingman fetches `appcast.xml` from raw.githubusercontent.com once an hour. No ForIT
+  service is involved and nothing about the person is sent.
