@@ -75,13 +75,59 @@ jobs:
       - name: Resolve Swift packages
         run: xcodebuild -resolvePackageDependencies -project "$PROJECT" -scheme "$SCHEME"
 
-      # ENABLE_HARDENED_RUNTIME=NO is deliberate while the build is ad-hoc signed. The hardened
+      # ENABLE_HARDENED_RUNTIME=NO is deliberate while the build has no Apple Team ID (ad-hoc or the
+      # interim certificate below). The hardened
       # runtime turns on library validation, which only accepts libraries signed by the same
       # Team ID; an ad-hoc signature has no Team ID, so dyld refused the embedded
       # Sparkle.framework and every DMG from this job crashed at launch with "Library missing"
       # (2026-09-05, macOS 27 on Ben's MacBook). Put the hardened runtime back on when the
       # build is signed with a ForIT Developer ID, which is also what notarisation needs.
-      - name: Build Release (ad-hoc signed, no Apple team)
+      # Interim signing identity (2026-09-05). macOS keys the Accessibility and Screen Recording grants
+      # to the app's designated requirement. An ad-hoc signature's requirement is the build's cdhash,
+      # so every release invalidated both grants on the Mac it was installed on. Signing with a
+      # certificate makes the requirement "identifier io.forit.wingman and certificate root = H..."
+      # (codesign writes "root" for a self-signed certificate, which is its own root, and "leaf"
+      # for one issued by a CA; both name the certificate, and neither changes between builds)
+      # which is the same for every build signed by that certificate, so the grants survive updates.
+      # The certificate is self-signed and held as two repo secrets (MACOS_SIGNING_P12_BASE64, the
+      # PKCS#12; MACOS_SIGNING_P12_PASSWORD). It is not a Developer ID: Gatekeeper still treats the
+      # app as unidentified, exactly as with ad-hoc, and the hardened runtime stays off (see below).
+      # Without the secrets the build falls back to ad-hoc signing. Replace with a ForIT Developer ID
+      # when one exists; changing the certificate costs one more grant of each permission.
+      - name: Import the interim signing certificate
+        id: signing
+        env:
+          P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$P12_BASE64" ] || [ -z "$P12_PASSWORD" ]; then
+            echo "MACOS_SIGNING_P12_BASE64 / MACOS_SIGNING_P12_PASSWORD not set; building ad-hoc signed."
+            echo "identity=-" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/wingman-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 16)
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          # Self-signed: trust it for code signing so it counts as a valid identity on this runner.
+          openssl pkcs12 -in "$RUNNER_TEMP/signing.p12" -passin "pass:$P12_PASSWORD" -nokeys -clcerts -out "$RUNNER_TEMP/signing.crt"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/signing.crt"
+          rm -f "$RUNNER_TEMP/signing.p12"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/^ *1) \([0-9A-F]*\) .*/\1/p')
+          if [ -z "$IDENTITY" ]; then
+            echo "No valid code-signing identity after import:"
+            security find-identity -p codesigning "$KEYCHAIN"
+            exit 1
+          fi
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "Signing with certificate $IDENTITY"
+
+      - name: Build Release (interim certificate; ad-hoc when the signing secrets are absent)
         run: |
           set -o pipefail
           mkdir -p build
@@ -91,9 +137,11 @@ jobs:
             -configuration Release \
             -destination "platform=macOS" \
             -derivedDataPath build/DerivedData \
-            CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_IDENTITY="${{ steps.signing.outputs.identity }}" \
+            CODE_SIGN_STYLE=Manual \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=YES \
+            OTHER_CODE_SIGN_FLAGS=--timestamp=none \
             ENABLE_HARDENED_RUNTIME=NO \
             DEVELOPMENT_TEAM= \
             MARKETING_VERSION="$APP_VERSION" \
@@ -109,8 +157,19 @@ jobs:
           grep -qx "io.forit.wingman" build/bundle-id.txt
           /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Print CFBundleName" "$APP/Contents/Info.plist" | grep -qx "Wingman"
-          codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature|flags" || true
+          codesign -dvv "$APP" 2>&1 | grep -E "Identifier|Signature|Authority|flags" || true
           codesign --verify --deep --strict "$APP"
+          # The designated requirement is what macOS keys the Accessibility and Screen Recording grants
+          # to. With the interim certificate it must name the certificate, not the build's cdhash,
+          # or every release would invalidate the grants again.
+          codesign -d -r- "$APP" 2>&1 | tee build/designated-requirement.txt
+          if [ "${{ steps.signing.outputs.identity }}" != "-" ]; then
+            grep -Eq "certificate (leaf|root)" build/designated-requirement.txt
+            if grep -q "cdhash" build/designated-requirement.txt; then
+              echo "Designated requirement still pins the cdhash; the grants would not survive an update."
+              exit 1
+            fi
+          fi
 
       # The app must survive dyld: launch the built binary and require it to still be alive
       # eight seconds later. A signing or embedding mistake (the Sparkle case above) kills the
@@ -197,7 +256,7 @@ jobs:
           DMG="build/${{ steps.dmg.outputs.dmg_name }}"
           gh release create "$TAG" "$DMG" \
             --title "Wingman $APP_VERSION" \
-            --notes "Unsigned CI build from ${{ github.sha }}. Not notarized: right-click > Open on first launch." \
+            --notes "CI build from ${{ github.sha }}, signed with the interim ForIT certificate (not a Developer ID, not notarized: right-click > Open on first launch)." \
             --target "${{ github.sha }}"
 
       - name: Update appcast.xml on main
