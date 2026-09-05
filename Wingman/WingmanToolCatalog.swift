@@ -302,7 +302,11 @@ enum WingmanToolCatalog {
         guard let searchText = nonEmptyString(modelArguments["q"]) else {
             throw WingmanToolRefusal.invalidArguments(toolName: searchKnowledgeBaseToolName, reason: "q (what to search for) is required.")
         }
-        var gatewayArguments: [String: Any] = ["q": searchText]
+        // for-Support matches every word of `q` against the title, summary and body, so a whole
+        // spoken question ("how do I create a quote in FL3XX?") either finds nothing or ranks the
+        // marketing pages that happen to contain "how" and "do" above the how-to. The gateway gets
+        // the keywords only.
+        var gatewayArguments: [String: Any] = ["q": searchKeywords(from: searchText, vocabulary: vocabulary)]
         // A product name is never a tenant: "search FL3XX for TSA" must not become tenant "fl3xx"
         // (a 404 from for-Support). Any term the vocabulary knows falls back to the default tenant.
         let requestedTenantSlug = nonEmptyString(modelArguments["tenant"])?.lowercased()
@@ -314,6 +318,46 @@ enum WingmanToolCatalog {
         let requestedLimit = integerValue(modelArguments["limit"]) ?? defaultKnowledgeBaseSearchResults
         gatewayArguments["limit"] = min(max(requestedLimit, 1), maximumKnowledgeBaseSearchResults)
         return gatewayArguments
+    }
+
+    /// Words that carry no search meaning on their own: question words, articles, pronouns,
+    /// auxiliaries, the prepositions a spoken question is built from, and the verbs people use to
+    /// ask ("show me", "I want to know"). Every word that survives must match an article.
+    static let knowledgeBaseSearchFillerWords: Set<String> = [
+        "a", "an", "the", "this", "that", "these", "those", "it", "its", "my", "me", "i", "we", "our", "you", "your",
+        "they", "their", "them", "he", "she", "his", "her", "who", "what", "which", "where", "when", "why", "how",
+        "is", "are", "was", "were", "be", "been", "being", "am", "do", "does", "did", "doing", "done", "can", "could",
+        "would", "should", "will", "shall", "may", "might", "must", "have", "has", "had", "having",
+        "to", "of", "in", "on", "at", "for", "from", "with", "without", "into", "onto", "about", "by", "as", "via",
+        "and", "or", "but", "if", "then", "so", "than", "not", "no",
+        "please", "want", "wants", "need", "needs", "like", "just", "go", "get", "tell", "show", "find", "know",
+        "there", "here", "some", "any", "all", "one", "way", "thing", "something", "someone", "anything",
+    ]
+
+    /// The keywords of a knowledge base query: the words of `searchText` minus the filler words,
+    /// minus the taught product names (every FL3XX article already contains "FL3XX" and a ForIT
+    /// how-to never does), with surrounding punctuation and a possessive "'s" dropped. When nothing
+    /// meaningful is left (the person asked only "what is FL3XX?") the text is sent as spoken so
+    /// the search still runs.
+    static func searchKeywords(from searchText: String, vocabulary: WingmanVocabulary) -> String {
+        let spokenWords = searchText
+            .components(separatedBy: .whitespacesAndNewlines)
+            .map { spokenWord -> String in
+                var bareWord = spokenWord.trimmingCharacters(in: .punctuationCharacters)
+                for possessiveSuffix in ["'s", "\u{2019}s"] where bareWord.hasSuffix(possessiveSuffix) {
+                    bareWord.removeLast(possessiveSuffix.count)
+                }
+                return bareWord
+            }
+            .filter { !$0.isEmpty }
+        let keywords = spokenWords.filter { spokenWord in
+            !knowledgeBaseSearchFillerWords.contains(spokenWord.lowercased())
+                && !vocabulary.containsTerm(matching: spokenWord)
+        }
+        if keywords.isEmpty {
+            return searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return keywords.joined(separator: " ")
     }
 
     private static func prepareReadKnowledgeBaseArticleArguments(_ modelArguments: [String: Any]) throws -> [String: Any] {

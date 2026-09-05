@@ -429,3 +429,39 @@ allowed by MDM at all, so each person approves those once on first use.
   certificate and notarised, which also unlocks MDM install commands; until then a policy is the only route.
 - Scope starts as Christine's laptop and grows to every ForIT Mac. Sign-in stays the person's ForIT Entra
   account with no group restriction, so nothing in the app changes per person.
+
+## 009 — A FL3XX question the knowledge base cannot answer gets labelled general guidance, not a dead end
+
+### Context
+
+Ben, 2026-09-05: "every time that it's like, I can't find an article for it because that's not a good
+response … when we realize that it's pulling from Flex, we insert some general instructions or something."
+Decision 003 told the model to stop at "the knowledge base has nothing on it yet". Measured the same day
+against the `forit` tenant (1,017 FL3XX articles): keyword searches ("create quote", "crew assignment")
+return the right how-tos, while a whole spoken question ("how do I add a crew member to a flight") ranks the
+Data Processing Agreement and a blog post above them, because for-Support matches every word against title,
+summary and body, orders title matches first and then by date. The model, seeing junk or nothing, said it
+could not find an article and stopped.
+
+### Decision
+
+Two changes in the app, none in the relay or in for-Support:
+
+- `WingmanToolCatalog.prepareCall` sends the keywords of the query only (`searchKeywords`): question words,
+  articles, pronouns, auxiliaries, prepositions and the taught product names are dropped before the search
+  leaves the Mac; a query that would become empty is sent as spoken.
+- The prompt tells the model to search with two to four keywords, to search a second time with different
+  keywords when the hits look off, and, when the second search still finds nothing relevant, to say so
+  briefly and then give general FL3XX guidance (module, screen, the usual way) marked plainly as general
+  knowledge rather than a ForIT-verified procedure, to be confirmed in FL3XX. A guessed menu, field or
+  setting is still never presented as if it came from an article.
+
+A proposal to for-Support (`docs/common-proposed/for-support-kb-read-api.md`, "Ranking") asks that staff
+search rank the `kb-*` and `appui-*` how-tos above the `web-*` marketing, press and legal pages.
+
+### Consequences
+
+- Staff get an answer on every FL3XX question; the label tells them which answers to double-check.
+- Decision 003's "never invent" softens to "never pass off": general knowledge is allowed when labelled.
+- Dropping "Flex" and "FL3XX" from the query means a ForIT how-to that never mentions the product is no
+  longer hidden behind its name.
