@@ -15,15 +15,18 @@ struct CompanionPanelView: View {
     // Observed on its own: SwiftUI does not re-render for changes inside a nested ObservableObject.
     @ObservedObject private var signInManager: WingmanEntraSignInManager
     @ObservedObject private var vocabularyStore: WingmanVocabularyStore
+    @ObservedObject private var inventoryAppStore: WingmanInventoryAppStore
     @ObservedObject private var usageSharingPreference: WingmanUsageSharingPreference
 
     /// The vocabulary list is collapsed by default so the panel stays short.
     @State private var isVocabularyExpanded = false
+    @State private var isAppsExpanded = false
 
     init(companionManager: CompanionManager) {
         self._companionManager = ObservedObject(wrappedValue: companionManager)
         self._signInManager = ObservedObject(wrappedValue: companionManager.signInManager)
         self._vocabularyStore = ObservedObject(wrappedValue: companionManager.vocabularyStore)
+        self._inventoryAppStore = ObservedObject(wrappedValue: companionManager.inventoryAppStore)
         self._usageSharingPreference = ObservedObject(wrappedValue: companionManager.usageSharingPreference)
     }
 
@@ -69,6 +72,11 @@ struct CompanionPanelView: View {
 
                 if usageSharingPreference.hasAcknowledgedNotice {
                     usageSharingToggleRow
+                        .padding(.horizontal, 16)
+                }
+
+                if !inventoryAppStore.apps.isEmpty {
+                    appsSection
                         .padding(.horizontal, 16)
                 }
 
@@ -895,6 +903,114 @@ struct CompanionPanelView: View {
             .help(citedArticle.url.absoluteString)
         }
         .padding(.vertical, 4)
+    }
+
+    // MARK: - Apps
+
+    /// The ForIT and client sites from the Support inventory, grouped by owner, each with an Open
+    /// button. The section exists only while the inventory has returned at least one active app
+    /// with a url (for-Support WO#1979), so no Mac shows an empty launcher.
+    private var appsSection: some View {
+        VStack(spacing: 6) {
+            Button(action: {
+                isAppsExpanded.toggle()
+            }) {
+                HStack {
+                    Text("Apps")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(DS.Colors.textSecondary)
+
+                    Spacer()
+
+                    Text(inventoryAppCountLabel)
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(DS.Colors.textTertiary)
+
+                    Image(systemName: isAppsExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+
+            if isAppsExpanded {
+                ForEach(WingmanInventoryApps.groupedByOwner(inventoryAppStore.apps)) { appGroup in
+                    Text(appGroup.owner)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(DS.Colors.textTertiary)
+                        .textCase(.uppercase)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+
+                    ForEach(appGroup.apps) { inventoryApp in
+                        inventoryAppRow(inventoryApp)
+                    }
+                }
+
+                Text(inventoryAppsSourceLabel)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var inventoryAppCountLabel: String {
+        let appCount = inventoryAppStore.apps.count
+        return appCount == 1 ? "1 site" : "\(appCount) sites"
+    }
+
+    private var inventoryAppsSourceLabel: String {
+        guard let fetchedAt = inventoryAppStore.fetchedAt else {
+            return "From the ForIT Support inventory. Apps and their addresses are managed there, not here."
+        }
+        let relativeDateFormatter = RelativeDateTimeFormatter()
+        relativeDateFormatter.unitsStyle = .short
+        let fetchedAgo = relativeDateFormatter.localizedString(for: fetchedAt, relativeTo: Date())
+        return "From the ForIT Support inventory, updated \(fetchedAgo). Apps and their addresses are managed there, not here."
+    }
+
+    /// One site: its name, its host, and an Open button that hands the address to the default
+    /// browser. The same open the launcher tool does by voice.
+    private func inventoryAppRow(_ inventoryApp: WingmanInventoryApp) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(inventoryApp.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textPrimary)
+
+                Text(inventoryApp.url.host ?? inventoryApp.url.absoluteString)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            Spacer()
+
+            Button(action: {
+                NSWorkspace.shared.open(inventoryApp.url)
+            }) {
+                Text("Open")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textOnAccent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(DS.Colors.accent)
+                    )
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help(inventoryApp.url.absoluteString)
+        }
+        .padding(.vertical, 2)
     }
 
     // MARK: - Vocabulary
