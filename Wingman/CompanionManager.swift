@@ -107,6 +107,15 @@ final class CompanionManager: ObservableObject {
     private var gatewayExposedToolNamesFetchedAt: Date?
     private static let gatewayToolListMaximumAge: TimeInterval = 15 * 60
 
+    /// The background `tools/list` refresh started when the push-to-talk key goes down, so the
+    /// turn does not wait for it after the key comes up. nil when none is running.
+    private var gatewayToolListRefreshTask: Task<Void, Never>?
+
+    /// Cuts the reply into sentences for text-to-speech while it streams. Reset for every model
+    /// call; held here (not in a local) because the stream callback is @Sendable and cannot
+    /// mutate a captured local.
+    private var spokenSentenceSplitter = WingmanSpokenSentenceSplitter()
+
     /// Conversation history so Claude remembers prior exchanges within a session.
     /// Each entry is the user's transcript and Claude's response.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
@@ -436,6 +445,12 @@ final class CompanionManager: ObservableObject {
                 return
             }
 
+            // The user is about to speak for a few seconds: use that time to wake the relay's
+            // worker and to refresh the gateway tool list if it is stale, so neither sits on
+            // the critical path once the key comes up.
+            claudeAPI.warmUpRelay()
+            refreshGatewayToolListIfStale()
+
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
             transientHideTask = nil
@@ -576,6 +591,12 @@ final class CompanionManager: ObservableObject {
 
                 gatewayAccessProblemMessage = nil
 
+                // Sentences are spoken while the reply streams; the spinner gives way to the
+                // responding state the moment the first one starts to play.
+                elevenLabsTTSClient.onQueuedPlaybackStarted = { [weak self] in
+                    self?.voiceState = .responding
+                }
+
                 let fullResponseText = try await runModelTurnWithGatewayTools(
                     labeledImages: labeledImages,
                     transcript: transcript
@@ -591,8 +612,10 @@ final class CompanionManager: ObservableObject {
                 // Switch to idle BEFORE setting the location so the triangle
                 // becomes visible and can fly to the target. Without this, the
                 // spinner hides the triangle and the flight animation is invisible.
+                // If speech already started, the state is responding, which shows the
+                // triangle too, so only the spinner needs replacing.
                 let hasPointCoordinate = parseResult.coordinate != nil
-                if hasPointCoordinate {
+                if hasPointCoordinate && voiceState == .processing {
                     voiceState = .idle
                 }
 
@@ -658,18 +681,16 @@ final class CompanionManager: ObservableObject {
 
                 WingmanAnalytics.trackAIResponseReceived(response: spokenText)
 
-                // Play the response via TTS. Keep the spinner (processing state)
-                // until the audio actually starts playing, then switch to responding.
-                if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    do {
-                        try await elevenLabsTTSClient.speakText(spokenText)
-                        // speakText returns after player.play() — audio is now playing
-                        voiceState = .responding
-                    } catch {
-                        WingmanAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ ElevenLabs TTS error: \(error)")
-                        speakCreditsErrorFallback()
-                    }
+                // The reply was queued for speech sentence by sentence as it streamed (see
+                // runModelTurnWithGatewayTools); wait here until the last sentence has played.
+                do {
+                    try await elevenLabsTTSClient.finishEnqueuedSpeech()
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    WingmanAnalytics.trackTTSError(error: error.localizedDescription)
+                    print("⚠️ ElevenLabs TTS error: \(error)")
+                    speakCreditsErrorFallback()
                 }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
@@ -729,16 +750,20 @@ final class CompanionManager: ObservableObject {
         let toolDefinitions = await toolDefinitionsForThisTurn()
 
         for _ in 0..<Self.maximumToolRoundsPerTurn {
+            spokenSentenceSplitter = WingmanSpokenSentenceSplitter()
             let streamedTurn = try await claudeAPI.streamTurn(
                 systemPrompt: Self.companionVoiceResponseSystemPrompt,
                 messages: messages,
                 tools: toolDefinitions,
                 toolChoice: ["type": "auto"],
-                onTextChunk: { _ in
-                    // No streaming text display — spinner stays until TTS plays
+                onTextChunk: { [weak self] accumulatedText in
+                    self?.enqueueSentencesReadyToSpeak(inAccumulatedText: accumulatedText)
                 }
             )
             guard !Task.isCancelled else { throw CancellationError() }
+            // A tool round's text ("Let me check the tickets.") is spoken too, so the user hears
+            // something while the tool runs instead of a silent spinner.
+            enqueueRemainingSpeech(inAccumulatedText: streamedTurn.text)
             guard streamedTurn.wantsToolCalls else {
                 return streamedTurn.text
             }
@@ -753,6 +778,8 @@ final class CompanionManager: ObservableObject {
                 case .accessProblem(let spokenReply, let panelMessage):
                     gatewayAccessProblemMessage = panelMessage
                     NotificationCenter.default.post(name: .wingmanShowPanel, object: nil)
+                    // Fixed text that never streamed, so it is queued for speech here.
+                    elevenLabsTTSClient.enqueueSentence(spokenReply)
                     return spokenReply + " [POINT:none]"
                 case .result(let text, let isError):
                     toolResultBlocks.append([
@@ -768,14 +795,33 @@ final class CompanionManager: ObservableObject {
 
         // The round cap is spent: one last turn with tools still declared (the transcript holds
         // tool blocks, which the API only accepts alongside tool definitions) but none allowed.
+        spokenSentenceSplitter = WingmanSpokenSentenceSplitter()
         let finalTurn = try await claudeAPI.streamTurn(
             systemPrompt: Self.companionVoiceResponseSystemPrompt,
             messages: messages,
             tools: toolDefinitions,
             toolChoice: ["type": "none"],
-            onTextChunk: { _ in }
+            onTextChunk: { [weak self] accumulatedText in
+                self?.enqueueSentencesReadyToSpeak(inAccumulatedText: accumulatedText)
+            }
         )
+        guard !Task.isCancelled else { throw CancellationError() }
+        enqueueRemainingSpeech(inAccumulatedText: finalTurn.text)
         return finalTurn.text
+    }
+
+    /// Hands every sentence that is complete in the streamed reply so far to the speech queue.
+    private func enqueueSentencesReadyToSpeak(inAccumulatedText accumulatedText: String) {
+        for readySentence in spokenSentenceSplitter.sentencesReady(inAccumulatedText: accumulatedText) {
+            elevenLabsTTSClient.enqueueSentence(readySentence)
+        }
+    }
+
+    /// Hands the tail of a finished reply (text after the last sentence boundary) to the queue.
+    private func enqueueRemainingSpeech(inAccumulatedText accumulatedText: String) {
+        if let remainingText = spokenSentenceSplitter.flushRemaining(inAccumulatedText: accumulatedText) {
+            elevenLabsTTSClient.enqueueSentence(remainingText)
+        }
     }
 
     /// The tool definitions for this turn: the catalog narrowed to what the gateway's `tools/list`
@@ -784,26 +830,47 @@ final class CompanionManager: ObservableObject {
     /// the app. A failed `tools/list` is logged and the whole catalog is offered instead, so a
     /// gateway hiccup costs at most a "that failed" on one tool, never the spoken question.
     private func toolDefinitionsForThisTurn() async -> [[String: Any]] {
+        if let refreshAlreadyRunning = gatewayToolListRefreshTask {
+            // Started when the key went down; usually finished by now.
+            await refreshAlreadyRunning.value
+        } else if !isCachedGatewayToolListUsable {
+            await fetchGatewayToolList()
+        }
+        return WingmanToolCatalog.modelToolDefinitions(exposedByGateway: gatewayExposedToolNames)
+    }
+
+    /// Whether the cached `tools/list` belongs to the signed-in account and is young enough.
+    private var isCachedGatewayToolListUsable: Bool {
         let signedInEmail = signInManager.signedInAccount?.emailAddress
         let cachedListIsForThisAccount = gatewayExposedToolNamesAccountEmail == signedInEmail
         let cachedListIsFresh = gatewayExposedToolNamesFetchedAt.map { Date().timeIntervalSince($0) < Self.gatewayToolListMaximumAge } ?? false
+        return gatewayExposedToolNames != nil && cachedListIsForThisAccount && cachedListIsFresh
+    }
 
-        if gatewayExposedToolNames == nil || !cachedListIsForThisAccount || !cachedListIsFresh {
-            do {
-                let exposedToolNames = try await gatewayToolClient.listToolNames()
-                gatewayExposedToolNames = exposedToolNames
-                gatewayExposedToolNamesAccountEmail = signedInEmail
-                gatewayExposedToolNamesFetchedAt = Date()
-                let hiddenToolNames = WingmanToolCatalog.tools.map(\.name).filter { !exposedToolNames.contains($0) }
-                if !hiddenToolNames.isEmpty {
-                    print("ℹ️ Gateway does not expose \(hiddenToolNames.joined(separator: ", ")); not offered to the model")
-                }
-            } catch {
-                print("⚠️ Gateway tools/list failed, offering the whole catalog: \(error)")
-            }
+    /// Starts a background `tools/list` refresh when the cache is stale and none is running.
+    /// Called when the push-to-talk key goes down; `toolDefinitionsForThisTurn` joins it.
+    private func refreshGatewayToolListIfStale() {
+        guard !isCachedGatewayToolListUsable, gatewayToolListRefreshTask == nil else { return }
+        gatewayToolListRefreshTask = Task { [weak self] in
+            await self?.fetchGatewayToolList()
+            self?.gatewayToolListRefreshTask = nil
         }
+    }
 
-        return WingmanToolCatalog.modelToolDefinitions(exposedByGateway: gatewayExposedToolNames)
+    private func fetchGatewayToolList() async {
+        let signedInEmail = signInManager.signedInAccount?.emailAddress
+        do {
+            let exposedToolNames = try await gatewayToolClient.listToolNames()
+            gatewayExposedToolNames = exposedToolNames
+            gatewayExposedToolNamesAccountEmail = signedInEmail
+            gatewayExposedToolNamesFetchedAt = Date()
+            let hiddenToolNames = WingmanToolCatalog.tools.map(\.name).filter { !exposedToolNames.contains($0) }
+            if !hiddenToolNames.isEmpty {
+                print("ℹ️ Gateway does not expose \(hiddenToolNames.joined(separator: ", ")); not offered to the model")
+            }
+        } catch {
+            print("⚠️ Gateway tools/list failed, offering the whole catalog: \(error)")
+        }
     }
 
     /// Applies the app-side policy (allow-list, argument rewriting) and calls the gateway.

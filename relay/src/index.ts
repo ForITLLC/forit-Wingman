@@ -10,3 +10,4 @@ app.setup({ enableHttpStream: true });
 import "./health.js";
 import "./chat.js";
 import "./tts.js";
+import "./keepWarm.js";

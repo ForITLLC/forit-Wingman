@@ -81,10 +81,33 @@ export interface WingmanChatRequest {
   tool_choice?: WingmanToolChoice;
 }
 
+/**
+ * Anthropic prompt caching (https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching).
+ * A breakpoint on a block caches everything up to and including it for a few minutes, so the
+ * tool rounds of one spoken question (seconds apart, identical prefix) and the next question
+ * (same system prompt and tool schemas) do not pay to process the same prompt again.
+ */
+export interface AnthropicCacheControl {
+  type: "ephemeral";
+}
+
+export interface AnthropicSystemTextBlock {
+  type: "text";
+  text: string;
+  cache_control?: AnthropicCacheControl;
+}
+
+export type AnthropicContentBlock = WingmanChatContentBlock & { cache_control?: AnthropicCacheControl };
+
+export interface AnthropicMessage {
+  role: "user" | "assistant";
+  content: string | AnthropicContentBlock[];
+}
+
 export interface AnthropicMessagesRequest {
   model: string;
-  system?: string;
-  messages: WingmanChatMessage[];
+  system?: AnthropicSystemTextBlock[];
+  messages: AnthropicMessage[];
   max_tokens: number;
   temperature?: number;
   stream: boolean;
@@ -167,6 +190,27 @@ function validateContentBlock(block: WingmanChatContentBlock, messageIndex: numb
  * Validates the app's request and produces the exact body sent upstream. Pure, so the rules are
  * unit-tested. Throws ChatRequestError with a message safe to return to the app.
  */
+/**
+ * Puts the second cache breakpoint on the last block of the last (user) message. Anthropic looks
+ * for cache hits at earlier breakpoints too, so round one caches the screenshots and the
+ * question, round two (which appends the tool_use and tool_result) reads that cache and extends
+ * it, and so on. The caller's blocks are copied, never mutated. An empty text block cannot carry
+ * a breakpoint, so such a message is forwarded unmarked.
+ */
+export function withPromptCacheBreakpoint(messages: WingmanChatMessage[]): AnthropicMessage[] {
+  const lastIndex = messages.length - 1;
+  return messages.map((message, index) => {
+    if (index !== lastIndex) return message;
+    const blocks: AnthropicContentBlock[] = typeof message.content === "string"
+      ? [{ type: "text", text: message.content }]
+      : message.content;
+    const lastBlock = blocks[blocks.length - 1];
+    if (lastBlock.type === "text" && lastBlock.text.trim().length === 0) return message;
+    const markedLastBlock: AnthropicContentBlock = { ...lastBlock, cache_control: { type: "ephemeral" } };
+    return { role: message.role, content: [...blocks.slice(0, -1), markedLastBlock] };
+  });
+}
+
 export function buildAnthropicRequest(
   wingmanRequest: WingmanChatRequest,
   config: Pick<RelayConfig, "allowedModels" | "defaultModel">,
@@ -199,11 +243,15 @@ export function buildAnthropicRequest(
 
   const anthropicRequest: AnthropicMessagesRequest = {
     model: resolveModel(wingmanRequest.model, config),
-    messages,
+    messages: withPromptCacheBreakpoint(messages),
     max_tokens: maxTokens,
     stream: wingmanRequest.stream !== false,
   };
-  if (wingmanRequest.system) anthropicRequest.system = wingmanRequest.system;
+  // The system prompt is the first breakpoint: tools are ordered before it in the cache, so this
+  // one block caches the tool schemas and the prompt together.
+  if (wingmanRequest.system) {
+    anthropicRequest.system = [{ type: "text", text: wingmanRequest.system, cache_control: { type: "ephemeral" } }];
+  }
   if (typeof wingmanRequest.temperature === "number") {
     anthropicRequest.temperature = Math.min(Math.max(wingmanRequest.temperature, 0), 1);
   }
