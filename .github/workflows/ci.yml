@@ -239,6 +239,14 @@ jobs:
           codesign --verify --deep --strict /Applications/Wingman.app
           /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" /Applications/Wingman.app/Contents/Info.plist | grep -qx "$APP_VERSION"
           pkgutil --pkg-info io.forit.wingman.pkg
+          # The postinstall hands the bundle to the console user; a root-owned bundle can never be
+          # updated silently by Sparkle, so the package must not leave one behind.
+          CONSOLE_USER=$(stat -f "%Su" /dev/console)
+          APP_OWNER=$(stat -f "%Su" /Applications/Wingman.app)
+          echo "console user: $CONSOLE_USER, installed app owner: $APP_OWNER"
+          if [ "$CONSOLE_USER" != "root" ] && [ "$CONSOLE_USER" != "loginwindow" ]; then
+            test "$APP_OWNER" = "$CONSOLE_USER"
+          fi
           # The postinstall launches the app for the console user; stop that copy before the job ends.
           sleep 3
           pkill -x Wingman || true

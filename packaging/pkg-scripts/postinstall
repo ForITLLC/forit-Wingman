@@ -8,6 +8,12 @@ if [ -z "$consoleUser" ] || [ "$consoleUser" = "root" ] || [ "$consoleUser" = "l
   exit 0
 fi
 consoleUserId=$(/usr/bin/id -u "$consoleUser")
+# Installer copies the bundle as root:wheel. Sparkle updates the app as the signed-in person and
+# cannot replace a bundle they may not write to without an authorization prompt, which a silent
+# background update never shows: a root-owned Wingman downloads every release and installs none
+# (Ben's Mac, 2026-09-05, three downloads and no install after the first Jamf install). Hand the
+# bundle to the console user, as a drag-install would have, so Sparkle keeps working afterwards.
+/usr/sbin/chown -R "$consoleUser":staff /Applications/Wingman.app || true
 # A copy that was running while the bundle was replaced underneath it is stale; quit it first.
 /usr/bin/pkill -x Wingman || true
 /bin/sleep 1
