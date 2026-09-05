@@ -150,6 +150,13 @@ enum DS {
         /// Its own token because the overlay serves a different purpose (screen overlay vs
         /// in-app UI) and may drift from the accent again.
         static let overlayCursorColor = foritCyan
+        /// The line drawn around the overlay pointer. Navy on a cyan face is the ForIT mark's own
+        /// pairing and is what keeps the pointer visible on a light screen (Ben, 2026-09-05:
+        /// "light is sometimes hard to see").
+        static let overlayCursorOutlineColor = foritNavy
+        /// A thin halo outside the navy line so the pointer also reads on dark and navy backgrounds,
+        /// the way the macOS arrow cursor carries a white edge.
+        static let overlayCursorHaloColor = Color.white
 
         // ── Floating Button Gradient ─────────────────────────────────
 
