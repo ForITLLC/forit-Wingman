@@ -1,9 +1,21 @@
 # Proposal for for-Support: every inventory app carries its URL, and the gateway can list them
 
-Status: **proposed** (written in for-Wingman on 2026-09-05). Nothing here is a cross-project write;
-for-Support and for-mcp ship their parts when their sessions pick this up. Wingman's side (a
-launcher: "open the XcelJet AVHR site", an Apps section in the panel) is built against the `url`
-field below and is offered only once `support_listInventoryApps` returns it.
+Status: **shipped** by for-Support on 2026-09-05 (WO#1979, forit-support master `f41f6f6`, evidence
+`docs/evidence/2026-09-05-wo1979-inventory-app-url.md` in that repo). Written in for-Wingman on
+2026-09-05 as a proposal; nothing here was a cross-project write. Wingman's side (a launcher: "open
+the XcelJet AVHR site", an Apps section in the panel) is built against the `url` field below.
+
+## As shipped (differences from the proposal below)
+
+- Every row of `GET /api/v1/inventory/apps` and of `support_listInventoryApps` carries `url`,
+  `hostnames` (array of strings) and `no_url_reason`, and the `tenant` filter accepts a slug. All
+  three are editable on the Support inventory page.
+- `no_url_reason` is new: an active row that has no front door (a triage category such as "Network"
+  or "Managed Windows Devices") says why instead of counting as URL missing. Wingman leaves such a
+  row out; it is not an error.
+- ForIT's own apps carry `tenant_slug: "forit"` and `tenant_name: "ForIT"` rather than null.
+- Verified from for-Wingman at 22:15Z with the call the app makes (`status: active`): 17 rows, 15
+  with a url and 2 with a reason; the gateway answers 200, so the key problem below is gone.
 
 ## Why
 

@@ -744,7 +744,7 @@ dialog nobody had answered yet held the panel and the Sparkle start behind it.
 ## 015 — Wingman is a launcher: one local tool opens installed apps and web addresses, and the Support inventory supplies the ForIT and client sites
 
 **Date:** 2026-09-05
-**Status:** Accepted (the inventory half waits on for-Support WO#1979)
+**Status:** Accepted (whole: the inventory half went live with for-Support WO#1979 on 2026-09-05)
 
 ### Context
 
@@ -778,9 +778,11 @@ Mac but capture, point and speak.
   model. Apps with a `url` are listed in the prompt ("AVHR (XcelJet) https://avhr.xceljet.com") so
   "open the XcelJet AVHR site" becomes a tool call with that address, and in the panel's Apps
   section with an Open button, grouped by owner with ForIT first. Apps without a url are left out
-  and the section is hidden while the list is empty. The url attribute and the gateway key that
-  the route rejects today are for-Support's (proposal
-  `docs/common-proposed/for-support-inventory-app-url.md`, WO#1979).
+  and the section is hidden while the list is empty. The url attribute and the gateway key were
+  for-Support's (WO#1979, shipped 2026-09-05 ~22:15Z at forit-support `f41f6f6`): the route now
+  returns `url`, `hostnames`, `no_url_reason`, `tenant_slug` and `tenant_name` on every row and the
+  gateway answers 200. The contract as shipped is
+  `docs/common-proposed/for-support-inventory-app-url.md`.
 - No new macOS permission: reading the Applications folders and asking the workspace to open
   something prompt for nothing.
 
@@ -792,9 +794,14 @@ Mac but capture, point and speak.
 - The usage report and the Mac log see the launcher as a tool call with a stable outcome label
   (`opened_application`, `application_not_installed`, `address_refused`, `open_failed`), never the
   name or address opened.
-- Until for-Support ships the url attribute and the key fix, the inventory half is dormant: the
-  fetch logs `inventory_apps_refresh_failed reason=tool_error_http_401` hourly and the Apps section
-  does not appear. Installed apps and spoken addresses work now.
+- Verified from for-Wingman on 2026-09-05 22:15Z with the exact call the app makes
+  (`support_listInventoryApps` with `status: active`): 17 active rows, 15 with a url (9 ForIT, 6
+  Great North Airlines) and 2 with a `no_url_reason` and no url, which the parser leaves out. The
+  parser reads `apps`, `name`, `status`, `url`, `id`, `tenant_name` and `category` and ignores the
+  rest, so the fields for-Support added beyond the proposal cost nothing; the fixture in
+  `WingmanInventoryAppsTests` is that live shape. A Mac proves the fetch with
+  `inventory_apps_refreshed apps=15` in its log on the first key-down after a 0.1.76 or later build
+  starts signed in; until Wingman restarts into such a build the line does not exist.
 
 ## 016 — Feedback about any ForIT app is filed by voice as a story under the ForIT board's "App Feedback" epic
 

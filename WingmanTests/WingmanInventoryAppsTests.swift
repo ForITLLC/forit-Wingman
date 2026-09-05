@@ -39,6 +39,29 @@ struct WingmanInventoryAppsTests {
         #expect(WingmanInventoryApps.apps(fromForITSupportResultText: dataText)?.count == 1)
     }
 
+    /// The shape for-Support ships since WO#1979 (2026-09-05): a row carries `hostnames`,
+    /// `no_url_reason`, `tenant_slug`, `vendor` and `source` beside the fields Wingman reads, the
+    /// list carries `count` and `synced_at`, and ForIT's own apps name "ForIT" as their tenant.
+    /// Two of the seventeen live rows had `url` null with a reason; they are left out, not errors.
+    private let liveResultTextFromForITSupport = """
+    {"apps": [
+      {"id": "E4A073F7-E854-4FF4-A79B-94F320F5B154", "name": "Microsoft 365 Business Premium", "category": "Productivity", "status": "active", "vendor": "Microsoft", "source": "manual", "url": "https://m365.cloud.microsoft/", "hostnames": ["m365.cloud.microsoft", "www.office.com"], "no_url_reason": null, "tenant_slug": "forit", "tenant_name": "ForIT", "updated_at": "2026-09-05T22:09:28.230Z"},
+      {"id": "FAF1B262-E7C8-44CB-B264-99FCACBD27A4", "name": "Network", "category": "Network", "status": "active", "vendor": "IT Pilots", "source": "manual", "url": null, "hostnames": [], "no_url_reason": "Category row for the IT Pilots managed network (triage routing), not an application. No front door.", "tenant_slug": "great-north", "tenant_name": "Great North Airlines", "updated_at": "2026-09-05T22:09:28.230Z"},
+      {"id": "1C78C562-90BE-46FC-A967-F94388AE2C5F", "name": "VMO", "category": "Operations", "status": "active", "vendor": "VMO Aviation Software", "source": "manual", "url": "https://vmo.aero/", "hostnames": ["vmo.aero", "api.ggn.vmo.cloud"], "no_url_reason": null, "tenant_slug": "great-north", "tenant_name": "Great North Airlines", "updated_at": "2026-09-05T22:09:28.230Z"}
+    ], "count": 3, "synced_at": "2026-09-05T22:15:04.684Z"}
+    """
+
+    @Test func theShapeForITSupportShipsParsesAndIgnoresTheFieldsWingmanDoesNotUse() throws {
+        let apps = try #require(WingmanInventoryApps.apps(fromForITSupportResultText: liveResultTextFromForITSupport))
+        #expect(apps.map(\.name) == ["Microsoft 365 Business Premium", "VMO"])
+        #expect(apps[0].ownerLabel == "ForIT")
+        #expect(apps[0].url.absoluteString == "https://m365.cloud.microsoft/")
+        #expect(apps[1].tenantName == "Great North Airlines")
+        #expect(apps[1].category == "Operations")
+        let groups = WingmanInventoryApps.groupedByOwner(apps)
+        #expect(groups.map(\.owner) == ["ForIT", "Great North Airlines"])
+    }
+
     @Test func textThatIsNotTheRouteShapeIsNil() {
         #expect(WingmanInventoryApps.apps(fromForITSupportResultText: "HTTP 401 from upstream") == nil)
         #expect(WingmanInventoryApps.apps(fromForITSupportResultText: "{\"error\": \"nope\"}") == nil)
