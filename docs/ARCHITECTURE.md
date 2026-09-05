@@ -23,7 +23,8 @@ root, `.ai/decisions.md`.
         (scope access_as_user)          │   ForIT relay (Azure Functions, rg-forit-wingman)
                                         │    /api/chat  → api.anthropic.com  (key from Key Vault)
                                         │    /api/tts   → api.elevenlabs.io  (key from Key Vault)
-                                        │    stores nothing; one log line per call (user, model, status)
+                                        │    /api/usage → Azure Table wingmanusage (one row per question, opt-out in the panel)
+                                        │    stores nothing else; one log line per call (user, model, status)
                                         ▼
                                    for-mcp gateway (Container App, MCP Streamable HTTP)
                                     support_listTickets · support_addTicketNote · forit_avops_search_flights
@@ -34,7 +35,7 @@ root, `.ai/decisions.md`.
 | Component | Where it runs | Holds | Never holds |
 |-----------|---------------|-------|-------------|
 | Wingman.app | the user's Mac | Entra refresh token (login keychain), UI preferences | any vendor key, any connection string |
-| Relay | Azure Functions `forit-wingman-relay` (compute in Canada Central) | Anthropic and ElevenLabs keys as Key Vault references | transcripts, screenshots, completions, tool results, the gateway token |
+| Relay | Azure Functions `forit-wingman-relay` (compute in Canada Central) | Anthropic and ElevenLabs keys as Key Vault references; usage rows (question, answer, tools, timings per turn) in the table `wingmanusage` of its own storage account, unless the person opted out (decision 010) | screenshots, audio, tool results, the gateway token |
 | for-mcp gateway | ForIT Container App (owned by for-mcp) | the Support database credentials | — (out of this repo) |
 
 ## One spoken question, end to end
@@ -59,12 +60,18 @@ root, `.ai/decisions.md`.
    voice configured. The overlay flies the cursor to the pointed element on the right display.
 6. **Remember.** Only the transcript and the spoken reply are kept (last ten exchanges, in memory).
    Screenshots and tool rounds are not carried into later turns.
+7. **Report** (unless the person switched "Share usage with ForIT" off). One `WingmanUsageReport` per turn
+   goes to the relay's `/api/usage` in its own task after the turn ends: question, spoken answer, model,
+   tools with their outcome (and the keywords of a knowledge base search), model rounds, five timings from
+   the final transcript, whether it pointed and how the turn ended. Never the screenshot, the audio or a
+   tool result. The relay keeps it as one row of the Azure Table `wingmanusage`, attributed from the token
+   (decision 010, `docs/PERMISSIONS.md` 6).
 
 ## Identity and access
 
 | Token | Issued to | Audience | Used for | Checked by |
 |-------|-----------|----------|----------|------------|
-| id_token | ForIT-Wingman-Client (`acc81527…`) | that client id | relay `/api/chat`, `/api/tts` | relay (`relay/src/entraToken.ts`): ForIT tenant issuer, JWKS signature, `@forit.io` email |
+| id_token | ForIT-Wingman-Client (`acc81527…`) | that client id | relay `/api/chat`, `/api/tts`, `/api/usage` | relay (`relay/src/entraToken.ts`): ForIT tenant issuer, JWKS signature, `@forit.io` email |
 | access token | same sign-in | for-mcp gateway (`861db494…`), scope `access_as_user` | gateway `tools/call` | gateway: allow-listed client, the user's app role (Reader / Writer / Admin → `tools.read` / `tools.write` / `tools.admin`) |
 
 Interim rule while Support is @forit.io-only: the relay's `WINGMAN_ALLOWED_EMAIL_DOMAINS` is `forit.io`.

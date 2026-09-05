@@ -115,20 +115,21 @@ jobs:
             --build-remote false \
             --query "status" -o tsv
 
-      - name: Verify the live relay is this commit and has its model key
+      - name: Verify the live relay is this commit, has its model key and can keep usage reports
         run: |
           for attempt in $(seq 1 24); do
             BODY=$(curl -s --max-time 20 "$RELAY_BASE_URL/api/health" || true)
             VERSION=$(echo "$BODY" | jq -r '.version // empty' 2>/dev/null || true)
             CHAT=$(echo "$BODY" | jq -r '.chatConfigured // empty' 2>/dev/null || true)
-            echo "attempt $attempt: version=${VERSION:-none} chatConfigured=${CHAT:-none}"
-            if [ "$VERSION" = "${{ github.sha }}" ] && [ "$CHAT" = "true" ]; then
+            USAGE=$(echo "$BODY" | jq -r '.usageRecording // empty' 2>/dev/null || true)
+            echo "attempt $attempt: version=${VERSION:-none} chatConfigured=${CHAT:-none} usageRecording=${USAGE:-none}"
+            if [ "$VERSION" = "${{ github.sha }}" ] && [ "$CHAT" = "true" ] && [ "$USAGE" = "true" ]; then
               echo "$BODY" | jq .
               exit 0
             fi
             sleep 10
           done
-          echo "::error::relay did not report version ${{ github.sha }} with chatConfigured=true"
+          echo "::error::relay did not report version ${{ github.sha }} with chatConfigured=true and usageRecording=true"
           echo "$BODY"
           exit 1
 
@@ -147,3 +148,9 @@ jobs:
             sleep 5
           done
           test "$CODE" = "401"
+          # The usage route is gated the same way: a report without a sign-in is never stored.
+          USAGE_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 -X POST \
+            -H "content-type: application/json" -d '{"turnId":"probe","question":"probe"}' \
+            "$RELAY_BASE_URL/api/usage" || true)
+          echo "POST /api/usage without a token: HTTP $USAGE_CODE"
+          test "$USAGE_CODE" = "401"

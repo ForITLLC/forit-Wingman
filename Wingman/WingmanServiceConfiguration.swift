@@ -71,6 +71,11 @@ enum WingmanServiceConfiguration {
         relayBaseURL.appendingPathComponent("api/tts")
     }
 
+    /// One usage report per spoken turn goes here when usage sharing is on (WingmanUsageSharing.swift).
+    static var relayUsageURL: URL {
+        relayBaseURL.appendingPathComponent("api/usage")
+    }
+
     // MARK: - Models
 
     /// The relay pins requests to its own allow-list (WINGMAN_ALLOWED_MODELS); this is the

@@ -71,6 +71,14 @@ final class CompanionManager: ObservableObject {
     /// panel). Applied on this Mac to speech recognition, the transcript, the prompt and the voice.
     let vocabularyStore = WingmanVocabularyStore()
 
+    /// Whether this Mac shares each turn's usage with ForIT (on unless switched off in the panel)
+    /// and whether the person has seen the disclosure. See WingmanUsageSharing.swift.
+    let usageSharingPreference = WingmanUsageSharingPreference()
+
+    /// When the push-to-talk key last went down, so the turn's usage report can say how long the
+    /// person spoke before the transcript was final.
+    private var pushToTalkKeyDownDate: Date?
+
     private lazy var claudeAPI: ClaudeAPI = {
         return ClaudeAPI(
             relayChatURL: WingmanServiceConfiguration.relayChatURL,
@@ -166,6 +174,16 @@ final class CompanionManager: ObservableObject {
         ? true
         : UserDefaults.standard.bool(forKey: "isWingmanCursorEnabled")
 
+    func setUsageSharingEnabled(_ enabled: Bool) {
+        usageSharingPreference.setEnabled(enabled)
+        WingmanAnalytics.trackUsageSharingChanged(enabled: enabled)
+    }
+
+    /// The person has seen the usage sharing disclosure (Start under it, or "Got it").
+    func acknowledgeUsageSharingNotice() {
+        usageSharingPreference.acknowledgeNotice()
+    }
+
     func setWingmanCursorEnabled(_ enabled: Bool) {
         isWingmanCursorEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "isWingmanCursorEnabled")
@@ -226,6 +244,8 @@ final class CompanionManager: ObservableObject {
         // Mark onboarding as completed so the Start button won't appear
         // again on future launches — the cursor will auto-show instead
         hasCompletedOnboarding = true
+        // The usage sharing notice sits above the Start button, so pressing Start is having read it.
+        acknowledgeUsageSharingNotice()
 
         WingmanAnalytics.trackOnboardingStarted()
 
@@ -489,6 +509,7 @@ final class CompanionManager: ObservableObject {
     
 
             WingmanAnalytics.trackPushToTalkStarted()
+            pushToTalkKeyDownDate = Date()
 
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
@@ -598,9 +619,22 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         elevenLabsTTSClient.stopPlayback()
 
+        // The turn's usage report is built up as the pipeline runs (WingmanUsageSharing.swift).
+        // It is a local of this turn, not a property, so a new question can never write into the
+        // report of the one it interrupted.
+        let turnUsageRecorder = WingmanTurnUsageRecorder(
+            question: transcript,
+            model: selectedModel,
+            pushToTalkKeyDownDate: pushToTalkKeyDownDate
+        )
+
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
+
+            // What the report says once the turn ends, filled in as the answer arrives.
+            var answerTextForUsageReport = ""
+            var pointedForUsageReport = false
 
             do {
                 // Capture all connected screens so the AI has full context
@@ -622,12 +656,15 @@ final class CompanionManager: ObservableObject {
                 // responding state the moment the first one starts to play.
                 elevenLabsTTSClient.onQueuedPlaybackStarted = { [weak self] in
                     self?.voiceState = .responding
+                    turnUsageRecorder.noteFirstSpeech()
                 }
 
                 let fullResponseText = try await runModelTurnWithGatewayTools(
                     labeledImages: labeledImages,
-                    transcript: transcript
+                    transcript: transcript,
+                    usageRecorder: turnUsageRecorder
                 )
+                turnUsageRecorder.noteAnswerComplete()
 
                 guard !Task.isCancelled else { return }
 
@@ -645,6 +682,8 @@ final class CompanionManager: ObservableObject {
                 if hasPointCoordinate && voiceState == .processing {
                     voiceState = .idle
                 }
+                answerTextForUsageReport = spokenText
+                pointedForUsageReport = hasPointCoordinate
 
                 // Pick the screen capture matching Claude's screen number,
                 // falling back to the cursor screen if not specified.
@@ -719,8 +758,11 @@ final class CompanionManager: ObservableObject {
                     print("⚠️ ElevenLabs TTS error: \(error)")
                     speakCreditsErrorFallback()
                 }
+
+                shareTurnUsageIfEnabled(recorder: turnUsageRecorder, answer: answerTextForUsageReport, outcome: .answered, pointed: pointedForUsageReport)
             } catch is CancellationError {
                 // User spoke again — response was interrupted
+                shareTurnUsageIfEnabled(recorder: turnUsageRecorder, answer: answerTextForUsageReport, outcome: .interrupted, pointed: pointedForUsageReport)
             } catch let urlError as URLError where urlError.code == .cancelled {
                 // The same interruption seen from URLSession: a new push-to-talk press cancelled
                 // this task while the relay stream was open, and URLSession reports that as
@@ -728,6 +770,7 @@ final class CompanionManager: ObservableObject {
                 // it must stay silent. Before this clause it fell through to the generic catch
                 // and spoke "The Wingman service is not available" (Ben, 2026-09-05 21:59, after a
                 // second press 130 ms after releasing the first).
+                shareTurnUsageIfEnabled(recorder: turnUsageRecorder, answer: answerTextForUsageReport, outcome: .interrupted, pointed: pointedForUsageReport)
             } catch let relayError as WingmanRelayError where relayError.isNotAuthorized {
                 // The relay no longer accepts this sign-in: drop it locally and send the
                 // user back to the panel instead of retrying with the same token.
@@ -748,12 +791,39 @@ final class CompanionManager: ObservableObject {
                     WingmanAnalytics.trackResponseError(error: error.localizedDescription)
                     print("⚠️ Companion response error: \(error)")
                     speakCreditsErrorFallback()
+                    shareTurnUsageIfEnabled(recorder: turnUsageRecorder, answer: answerTextForUsageReport, outcome: .failed, pointed: pointedForUsageReport)
                 }
             }
 
             if !Task.isCancelled {
                 voiceState = .idle
                 scheduleTransientHideIfNeeded()
+            }
+        }
+    }
+
+    // MARK: - Usage sharing
+
+    /// Sends the finished turn's usage report to the relay when sharing is on. It runs in its own
+    /// task so the next question never waits on it, and a failure is logged and dropped: a report
+    /// is never retried. A turn that ended for want of a sign-in never gets here, because there is
+    /// no token to send the report with either.
+    private func shareTurnUsageIfEnabled(
+        recorder: WingmanTurnUsageRecorder,
+        answer: String,
+        outcome: WingmanUsageTurnOutcome,
+        pointed: Bool
+    ) {
+        guard usageSharingPreference.isEnabled else { return }
+        let usageReport = recorder.makeReport(answer: answer, outcome: outcome, pointed: pointed)
+        let claudeAPI = self.claudeAPI
+        Task {
+            do {
+                let wasStored = try await claudeAPI.sendUsageReport(usageReport, to: WingmanServiceConfiguration.relayUsageURL)
+                WingmanAnalytics.trackUsageReportSent(stored: wasStored)
+            } catch {
+                WingmanAnalytics.trackUsageReportFailed(error: error.localizedDescription)
+                print("⚠️ Usage report not delivered: \(error)")
             }
         }
     }
@@ -773,7 +843,8 @@ final class CompanionManager: ObservableObject {
     /// means a stale tool result is never reasoned from twice.
     private func runModelTurnWithGatewayTools(
         labeledImages: [(data: Data, label: String)],
-        transcript: String
+        transcript: String,
+        usageRecorder: WingmanTurnUsageRecorder
     ) async throws -> String {
         var messages: [[String: Any]] = []
         for exchange in conversationHistory {
@@ -789,12 +860,14 @@ final class CompanionManager: ObservableObject {
 
         for _ in 0..<Self.maximumToolRoundsPerTurn {
             spokenSentenceSplitter = WingmanSpokenSentenceSplitter()
+            usageRecorder.noteModelRoundStarted()
             let streamedTurn = try await claudeAPI.streamTurn(
                 systemPrompt: voiceSystemPromptForThisTurn,
                 messages: messages,
                 tools: toolDefinitions,
                 toolChoice: ["type": "auto"],
                 onTextChunk: { [weak self] accumulatedText in
+                    usageRecorder.noteFirstModelText()
                     self?.enqueueSentencesReadyToSpeak(inAccumulatedText: accumulatedText)
                 }
             )
@@ -810,7 +883,7 @@ final class CompanionManager: ObservableObject {
 
             var toolResultBlocks: [[String: Any]] = []
             for toolUse in streamedTurn.toolUses {
-                let outcome = await executeGatewayTool(toolUse)
+                let outcome = await executeGatewayTool(toolUse, usageRecorder: usageRecorder)
                 guard !Task.isCancelled else { throw CancellationError() }
                 switch outcome {
                 case .accessProblem(let spokenReply, let panelMessage):
@@ -834,12 +907,14 @@ final class CompanionManager: ObservableObject {
         // The round cap is spent: one last turn with tools still declared (the transcript holds
         // tool blocks, which the API only accepts alongside tool definitions) but none allowed.
         spokenSentenceSplitter = WingmanSpokenSentenceSplitter()
+        usageRecorder.noteModelRoundStarted()
         let finalTurn = try await claudeAPI.streamTurn(
             systemPrompt: voiceSystemPromptForThisTurn,
             messages: messages,
             tools: toolDefinitions,
             toolChoice: ["type": "none"],
             onTextChunk: { [weak self] accumulatedText in
+                usageRecorder.noteFirstModelText()
                 self?.enqueueSentencesReadyToSpeak(inAccumulatedText: accumulatedText)
             }
         )
@@ -916,7 +991,7 @@ final class CompanionManager: ObservableObject {
     /// Applies the app-side policy (allow-list, argument rewriting) and calls the gateway.
     /// Sign-in failures propagate so the caller's existing sign-in handling runs; everything else
     /// becomes an outcome the model or the fixed refusal can speak.
-    private func executeGatewayTool(_ toolUse: ClaudeToolUseRequest) async -> GatewayToolOutcome {
+    private func executeGatewayTool(_ toolUse: ClaudeToolUseRequest, usageRecorder: WingmanTurnUsageRecorder) async -> GatewayToolOutcome {
         let preparedCall: WingmanPreparedToolCall
         do {
             preparedCall = try WingmanToolCatalog.prepareCall(
@@ -927,18 +1002,28 @@ final class CompanionManager: ObservableObject {
             )
         } catch let refusal as WingmanToolRefusal {
             WingmanAnalytics.trackToolRefused(toolName: toolUse.name, reason: refusal.modelFacingMessage)
+            usageRecorder.noteToolCall(name: toolUse.name, searchTerms: nil, outcome: .refused)
             print("🛑 Tool refused by the app: \(refusal.modelFacingMessage)")
             return .result(text: refusal.modelFacingMessage, isError: true)
         } catch {
+            usageRecorder.noteToolCall(name: toolUse.name, searchTerms: nil, outcome: .refused)
             return .result(text: "\(toolUse.name) was not called: \(error.localizedDescription)", isError: true)
         }
 
         WingmanAnalytics.trackToolCalled(toolName: preparedCall.toolName)
         print("🔧 Gateway tool: \(preparedCall.toolName) \(preparedCall.arguments.keys.sorted())")
 
+        // The usage report names the tool and, for a knowledge base search, the keywords that went
+        // to for-Support (after the app's own keyword filtering), so a search that found nothing
+        // can be read back later. No other argument and no result is ever recorded.
+        let searchTermsForUsageReport: String? = preparedCall.toolName == WingmanToolCatalog.searchKnowledgeBaseToolName
+            ? preparedCall.arguments["q"] as? String
+            : nil
+
         do {
             let toolResult = try await gatewayToolClient.callTool(named: preparedCall.toolName, arguments: preparedCall.arguments)
             let condensedText = WingmanToolCatalog.condenseResult(toolName: preparedCall.toolName, resultText: toolResult.text)
+            usageRecorder.noteToolCall(name: preparedCall.toolName, searchTerms: searchTermsForUsageReport, outcome: toolResult.isError ? .error : .ok)
             if toolResult.isError {
                 // The label carries the HTTP status the gateway reported (tool_error_http_401), never
                 // the error body, so the Mac log says why a tool failed without holding any data.
@@ -950,6 +1035,12 @@ final class CompanionManager: ObservableObject {
             return .result(text: condensedText, isError: toolResult.isError)
         } catch let gatewayError as WingmanGatewayToolError {
             let signedInEmail = signInManager.signedInAccount?.emailAddress ?? "this account"
+            switch gatewayError {
+            case .accessDenied, .insufficientAccess:
+                usageRecorder.noteToolCall(name: preparedCall.toolName, searchTerms: searchTermsForUsageReport, outcome: .refused)
+            default:
+                usageRecorder.noteToolCall(name: preparedCall.toolName, searchTerms: searchTermsForUsageReport, outcome: .error)
+            }
             switch gatewayError {
             case .accessDenied(let detail):
                 WingmanAnalytics.trackToolFailed(toolName: preparedCall.toolName, outcome: "access_denied")
@@ -973,6 +1064,7 @@ final class CompanionManager: ObservableObject {
             }
         } catch {
             WingmanAnalytics.trackToolFailed(toolName: preparedCall.toolName, outcome: "transport_error")
+            usageRecorder.noteToolCall(name: preparedCall.toolName, searchTerms: searchTermsForUsageReport, outcome: .error)
             print("⚠️ Gateway tool transport error: \(error)")
             return .result(text: "\(preparedCall.toolName) failed: \(error.localizedDescription)", isError: true)
         }

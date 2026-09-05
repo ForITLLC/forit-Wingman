@@ -15,6 +15,7 @@ struct CompanionPanelView: View {
     // Observed on its own: SwiftUI does not re-render for changes inside a nested ObservableObject.
     @ObservedObject private var signInManager: WingmanEntraSignInManager
     @ObservedObject private var vocabularyStore: WingmanVocabularyStore
+    @ObservedObject private var usageSharingPreference: WingmanUsageSharingPreference
 
     /// The vocabulary editor is collapsed by default so the panel stays short.
     @State private var isVocabularyExpanded = false
@@ -26,6 +27,7 @@ struct CompanionPanelView: View {
         self._companionManager = ObservedObject(wrappedValue: companionManager)
         self._signInManager = ObservedObject(wrappedValue: companionManager.signInManager)
         self._vocabularyStore = ObservedObject(wrappedValue: companionManager.vocabularyStore)
+        self._usageSharingPreference = ObservedObject(wrappedValue: companionManager.usageSharingPreference)
     }
 
     var body: some View {
@@ -46,12 +48,27 @@ struct CompanionPanelView: View {
             gatewayAccessProblemBanner
                 .padding(.horizontal, 16)
 
+            // The usage sharing disclosure is shown until the person has seen it: above the Start
+            // button on a new Mac, with its own "Got it" on a Mac that had already onboarded.
+            if !usageSharingPreference.hasAcknowledgedNotice {
+                Spacer()
+                    .frame(height: 12)
+
+                usageSharingNoticeSection
+                    .padding(.horizontal, 16)
+            }
+
             if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
                 Spacer()
                     .frame(height: 12)
 
                 modelPickerRow
                     .padding(.horizontal, 16)
+
+                if usageSharingPreference.hasAcknowledgedNotice {
+                    usageSharingToggleRow
+                        .padding(.horizontal, 16)
+                }
 
                 vocabularySection
                     .padding(.horizontal, 16)
@@ -674,6 +691,98 @@ struct CompanionPanelView: View {
                 )
         }
         .buttonStyle(.plain)
+        .pointerCursor()
+    }
+
+    // MARK: - Usage sharing
+
+    /// The disclosure (.ai/decisions.md 010): what ForIT keeps, what it never keeps, and the switch
+    /// to turn it off, shown before the first question. On a Mac that has already onboarded the
+    /// Start button is gone, so a "Got it" button acknowledges it instead.
+    private var usageSharingNoticeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "chart.bar.doc.horizontal")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.accent)
+                    .frame(width: 16)
+                Text(WingmanUsageSharingNotice.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(DS.Colors.textPrimary)
+            }
+
+            Text(WingmanUsageSharingNotice.body)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundColor(DS.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Text(WingmanUsageSharingNotice.switchLabel)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+                Spacer()
+                usageSharingToggle
+            }
+
+            if companionManager.hasCompletedOnboarding {
+                Button(action: {
+                    companionManager.acknowledgeUsageSharingNotice()
+                }) {
+                    Text("Got it")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textOnAccent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(DS.Colors.accent)
+                        )
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.large, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.large, style: .continuous)
+                .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+        )
+    }
+
+    /// The switch as a settings row once the notice has been seen, next to the model picker.
+    private var usageSharingToggleRow: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: "chart.bar.doc.horizontal")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .frame(width: 16)
+
+                Text(WingmanUsageSharingNotice.switchLabel)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+            }
+
+            Spacer()
+
+            usageSharingToggle
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var usageSharingToggle: some View {
+        Toggle("", isOn: Binding(
+            get: { usageSharingPreference.isEnabled },
+            set: { companionManager.setUsageSharingEnabled($0) }
+        ))
+        .toggleStyle(.switch)
+        .labelsHidden()
+        .tint(DS.Colors.accent)
+        .scaleEffect(0.8)
         .pointerCursor()
     }
 
