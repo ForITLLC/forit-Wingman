@@ -196,5 +196,13 @@
             <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/ForITLLC/forit-Wingman/releases/download/v0.1.68/Wingman-0.1.68.dmg" length="2246074" type="application/octet-stream" sparkle:edSignature="G464TF5nPgfMWe4H0hMhJskIv6WRbflOH8dUw2rsPwxQFRmdL/d/R0FDGv3guWE96TTNz1PU2yFjtOuI7hCYAA=="/>
         </item>
+        <item>
+            <title>0.1.71</title>
+            <pubDate>Sat, 05 Sep 2026 21:25:20 +0000</pubDate>
+            <sparkle:version>71</sparkle:version>
+            <sparkle:shortVersionString>0.1.71</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/ForITLLC/forit-Wingman/releases/download/v0.1.71/Wingman-0.1.71.dmg" length="2249348" type="application/octet-stream" sparkle:edSignature="EmvZT0CjnReWH2Dag5U8PhhOlqJ5T6XKeuhr5odjEyIscuXXMHmo5PPSMQbrnWjfXXrsG4w3oq7/tAv7Th1mCQ=="/>
+        </item>
     </channel>
 </rss>
