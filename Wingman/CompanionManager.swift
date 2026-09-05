@@ -101,7 +101,6 @@ final class CompanionManager: ObservableObject {
     private lazy var claudeAPI: ClaudeAPI = {
         return ClaudeAPI(
             relayChatURL: WingmanServiceConfiguration.relayChatURL,
-            model: selectedModel,
             bearerTokenProvider: { [signInManager] in try await signInManager.validIdToken() }
         )
     }()
@@ -203,17 +202,6 @@ final class CompanionManager: ObservableObject {
     /// Whether the blue cursor overlay is currently visible on screen.
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
-
-    /// The Claude model used for voice responses. Persisted to UserDefaults.
-    @Published var selectedModel: String = WingmanServiceConfiguration.normalisedModelId(
-        UserDefaults.standard.string(forKey: "selectedClaudeModel")
-    )
-
-    func setSelectedModel(_ model: String) {
-        selectedModel = model
-        UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
-        claudeAPI.model = model
-    }
 
     /// User preference for whether the Wingman cursor should be shown.
     /// When toggled off, the overlay is hidden and push-to-talk is disabled.
@@ -841,7 +829,6 @@ final class CompanionManager: ObservableObject {
         // report of the one it interrupted.
         let turnUsageRecorder = WingmanTurnUsageRecorder(
             question: transcript,
-            model: selectedModel,
             pushToTalkKeyDownDate: pushToTalkKeyDownDate
         )
 
@@ -1090,6 +1077,7 @@ final class CompanionManager: ObservableObject {
                     self?.enqueueSentencesReadyToSpeak(inAccumulatedText: accumulatedText)
                 }
             )
+            usageRecorder.noteModelUsed(streamedTurn.modelUsed)
             guard !Task.isCancelled else { throw CancellationError() }
             // A tool round's text ("Let me check the tickets.") is spoken too, so the user hears
             // something while the tool runs instead of a silent spinner.
@@ -1146,6 +1134,7 @@ final class CompanionManager: ObservableObject {
                 self?.enqueueSentencesReadyToSpeak(inAccumulatedText: accumulatedText)
             }
         )
+        usageRecorder.noteModelUsed(finalTurn.modelUsed)
         guard !Task.isCancelled else { throw CancellationError() }
         enqueueRemainingSpeech(inAccumulatedText: finalTurn.text)
         return finalTurn.text

@@ -3,7 +3,7 @@
 //  WingmanTests
 //
 //  Covers the pure parts of the Entra sign-in: PKCE, redirect parsing, id_token claim reading,
-//  form encoding, and the model allow-list mapping. Nothing here touches the network or keychain.
+//  and form encoding. Nothing here touches the network or keychain.
 //
 
 import Foundation
@@ -88,11 +88,5 @@ struct WingmanSignInTests {
     @Test func formEncodingKeepsTokenCharactersIntact() {
         let encoded = WingmanEntraSignInManager.formURLEncoded(["refresh_token": "abc+/=def", "grant_type": "refresh_token"])
         #expect(encoded == "grant_type=refresh_token&refresh_token=abc%2B%2F%3Ddef")
-    }
-
-    @Test func storedModelPreferenceIsMappedOntoTheRelayAllowList() {
-        #expect(WingmanServiceConfiguration.normalisedModelId(nil) == "claude-sonnet-5")
-        #expect(WingmanServiceConfiguration.normalisedModelId("claude-sonnet-4-6") == "claude-sonnet-5")
-        #expect(WingmanServiceConfiguration.normalisedModelId("claude-opus-5") == "claude-opus-5")
     }
 }

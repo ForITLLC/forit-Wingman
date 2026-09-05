@@ -51,13 +51,14 @@ struct WingmanUsageSharingTests {
         let transcriptFinal = keyDown.addingTimeInterval(2.1)
         let recorder = WingmanTurnUsageRecorder(
             question: "how do I add a crew member in FL3XX",
-            model: "claude-sonnet-5",
             pushToTalkKeyDownDate: keyDown,
             transcriptFinalisedAt: transcriptFinal,
             appVersion: "0.1.58",
             turnId: "turn-1"
         )
         recorder.noteModelRoundStarted()
+        recorder.noteModelUsed(nil) // a missing header never sets the model
+        recorder.noteModelUsed("claude-sonnet-5")
         recorder.noteFirstModelText(at: transcriptFinal.addingTimeInterval(0.9))
         recorder.noteFirstModelText(at: transcriptFinal.addingTimeInterval(5.0)) // a later round never moves the first
         recorder.noteToolCall(name: "support_searchKbArticles", searchTerms: "crew member", outcome: .ok)
@@ -81,16 +82,17 @@ struct WingmanUsageSharingTests {
     }
 
     @Test func anInterruptedTurnReportsOnlyWhatHappened() {
-        let recorder = WingmanTurnUsageRecorder(question: "hello", model: "claude-sonnet-5", pushToTalkKeyDownDate: nil, transcriptFinalisedAt: keyDown, appVersion: "0.1.58", turnId: "turn-2")
+        let recorder = WingmanTurnUsageRecorder(question: "hello", pushToTalkKeyDownDate: nil, transcriptFinalisedAt: keyDown, appVersion: "0.1.58", turnId: "turn-2")
         recorder.noteModelRoundStarted()
         let report = recorder.makeReport(answer: "", outcome: .interrupted, pointed: false, finishedAt: keyDown.addingTimeInterval(0.5))
         #expect(report.timings == WingmanUsageTimings(listeningMs: nil, firstModelTextMs: nil, firstSpeechMs: nil, answerCompleteMs: nil, totalMs: 500))
         #expect(report.askedAt == "2027-01-15T08:00:00.000Z")
+        #expect(report.model == WingmanTurnUsageRecorder.modelUnknownLabel)
         #expect(report.toolCalls.isEmpty)
     }
 
     @Test func toolCallsStopAtTheRelaysLimit() {
-        let recorder = WingmanTurnUsageRecorder(question: "hello", model: "claude-sonnet-5", pushToTalkKeyDownDate: nil, transcriptFinalisedAt: keyDown, appVersion: "0.1.58", turnId: "turn-3")
+        let recorder = WingmanTurnUsageRecorder(question: "hello", pushToTalkKeyDownDate: nil, transcriptFinalisedAt: keyDown, appVersion: "0.1.58", turnId: "turn-3")
         for _ in 0..<(WingmanTurnUsageRecorder.maximumRecordedToolCalls + 5) {
             recorder.noteToolCall(name: "support_listTickets", searchTerms: nil, outcome: .ok)
         }
@@ -100,7 +102,7 @@ struct WingmanUsageSharingTests {
     // MARK: - Wire shape
 
     @Test func theReportEncodesTheFieldNamesTheRelayValidates() throws {
-        let recorder = WingmanTurnUsageRecorder(question: "hello", model: "claude-sonnet-5", pushToTalkKeyDownDate: keyDown, transcriptFinalisedAt: keyDown.addingTimeInterval(1), appVersion: "0.1.58", turnId: "turn-4")
+        let recorder = WingmanTurnUsageRecorder(question: "hello", pushToTalkKeyDownDate: keyDown, transcriptFinalisedAt: keyDown.addingTimeInterval(1), appVersion: "0.1.58", turnId: "turn-4")
         recorder.noteToolCall(name: "support_getKbArticle", searchTerms: nil, outcome: .error)
         let report = recorder.makeReport(answer: "hi", outcome: .failed, pointed: false, finishedAt: keyDown.addingTimeInterval(2))
 

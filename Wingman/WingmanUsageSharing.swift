@@ -116,7 +116,11 @@ final class WingmanTurnUsageRecorder {
 
     let turnId: String
     let question: String
-    let model: String
+    /// The model the relay answered with, from its `x-wingman-model` response header. The app
+    /// names no model (decision 018); the relay's `WINGMAN_DEFAULT_MODEL` setting decides.
+    private var modelUsed: String?
+    /// What the report says when no relay answer arrived (the turn failed or was interrupted first).
+    static let modelUnknownLabel = "unknown"
     private let appVersion: String
     private let pushToTalkKeyDownDate: Date?
     private let transcriptFinalisedAt: Date
@@ -128,14 +132,12 @@ final class WingmanTurnUsageRecorder {
 
     init(
         question: String,
-        model: String,
         pushToTalkKeyDownDate: Date?,
         transcriptFinalisedAt: Date = Date(),
         appVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
         turnId: String = UUID().uuidString
     ) {
         self.question = question
-        self.model = model
         self.pushToTalkKeyDownDate = pushToTalkKeyDownDate
         self.transcriptFinalisedAt = transcriptFinalisedAt
         self.appVersion = appVersion
@@ -145,6 +147,13 @@ final class WingmanTurnUsageRecorder {
     /// One call to the relay's /api/chat; a turn with tools has several.
     func noteModelRoundStarted() {
         modelRounds += 1
+    }
+
+    /// The model the relay says it used for a round (nil when the header was missing).
+    func noteModelUsed(_ modelUsedForThisRound: String?) {
+        if let modelUsedForThisRound, !modelUsedForThisRound.isEmpty {
+            modelUsed = modelUsedForThisRound
+        }
     }
 
     func noteFirstModelText(at date: Date = Date()) {
@@ -177,7 +186,7 @@ final class WingmanTurnUsageRecorder {
             turnId: turnId,
             askedAt: Self.iso8601Formatter.string(from: pushToTalkKeyDownDate ?? transcriptFinalisedAt),
             appVersion: appVersion,
-            model: model,
+            model: modelUsed ?? Self.modelUnknownLabel,
             question: question,
             answer: answer,
             toolCalls: toolCalls,

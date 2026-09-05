@@ -496,7 +496,7 @@ diagnosed from `log show` on Ben's Mac.
   usage sharing notice (`WingmanUsageSharingNotice`) above the Start button: what ForIT keeps, what it never
   keeps, and a switch. Pressing Start counts as having read it. A Mac that onboarded before this build sees
   the same notice once, with a "Got it" button, and the panel opens on its own at launch until it is seen.
-  The switch stays in the panel, next to the model picker, as "Share usage with ForIT". The preference is
+  The switch stays in the panel (next to the model picker until decision 018 removed it) as "Share usage with ForIT". The preference is
   `sharesUsageWithForIT` in UserDefaults (missing = on).
 - **One report per spoken turn** (`WingmanUsageReport`, `WingmanTurnUsageRecorder`): the question as the
   model saw it (after the vocabulary rewrite), the spoken answer, the model, the app version, which tools
@@ -895,3 +895,36 @@ button, and a person who cannot find the menu bar icon (Christine on a notch Mac
 - A person can quit Wingman without the panel, and a quit by mistake costs a trip to the
   Applications folder or a login.
 - Nothing about permissions changes: `SMAppService` needs none, and the quit tool sends nothing.
+
+## 018 — The model is a ForIT relay setting; the panel offers no Sonnet/Opus choice
+
+**Date:** 2026-09-05
+**Status:** Accepted
+
+### Context
+
+Ben, 2026-09-05: "Why do we have a fucking option for Opus vs Sonnet in this? Like, why the fuck
+would we give that option to the user?"
+
+The picker came from Clicky, the upstream app, and survived the rename unquestioned. Which model
+answers a support question is a ForIT decision about cost and quality; a person using Wingman has no
+basis for it and no reason to be asked.
+
+### Decision
+
+- The panel has no model picker and the app keeps no model preference. `CompanionManager` no longer
+  holds a `selectedModel`, `WingmanServiceConfiguration` no longer lists models, and the old
+  `selectedClaudeModel` user default is simply ignored.
+- The app sends no `model` in `/api/chat`. The relay already resolves an absent or disallowed model
+  to `WINGMAN_DEFAULT_MODEL` (`resolveModel` in `relay/src/chat.ts`, bicep param `defaultModel`,
+  `claude-sonnet-5` today), so changing the model for every Mac is an app-setting change on the
+  Function App, with no client release. The allow-list stays on the relay as a guard.
+- The usage report still says which model answered: the relay's `x-wingman-model` response header
+  is read by `ClaudeAPI.streamTurn` into `ClaudeStreamedTurn.modelUsed` and noted on the turn's
+  `WingmanTurnUsageRecorder`; a turn that never got an answer reports `unknown`.
+
+### Consequences
+
+- ForIT changes the model in one place and every Wingman follows on its next question.
+- A Mac that had Opus selected goes back to the relay default; nothing tells the person, because
+  nothing was ever theirs to choose.

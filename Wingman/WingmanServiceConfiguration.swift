@@ -76,24 +76,4 @@ enum WingmanServiceConfiguration {
         relayBaseURL.appendingPathComponent("api/usage")
     }
 
-    // MARK: - Models
-
-    /// The relay pins requests to its own allow-list (WINGMAN_ALLOWED_MODELS); this is the
-    /// matching list the panel offers. Anything else the app asks for becomes the relay default.
-    static let selectableModels: [(label: String, modelId: String)] = [
-        (label: "Sonnet", modelId: "claude-sonnet-5"),
-        (label: "Opus", modelId: "claude-opus-5"),
-    ]
-
-    static let defaultModelId = "claude-sonnet-5"
-
-    /// Maps whatever was persisted (possibly a model id from an earlier build) onto a model the
-    /// relay accepts, so a stale preference never produces a silent fallback on the server.
-    static func normalisedModelId(_ storedModelId: String?) -> String {
-        guard let storedModelId,
-              selectableModels.contains(where: { $0.modelId == storedModelId }) else {
-            return defaultModelId
-        }
-        return storedModelId
-    }
 }
