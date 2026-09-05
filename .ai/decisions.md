@@ -565,12 +565,16 @@ model must never be the thing that decides a ticket may be filed.
 - **Attribution in the description.** for-Support records the create under its automation identity, so the
   app appends `Filed by <name> (<email>) with Wingman.` to the description. Every ticket says who asked.
 - **for-Support judges the words again.** The consent is sent verbatim; for-Support's rail is the second
-  gate and its hold is answered by asking the person again, never by a retry. Today the gateway (FastMCP's
-  OpenAPI director) forwards only the arguments the for-Support schema declares, and `consent` and
-  `skipAutoReply` are not declared, so a live create is held at for-Support until it ships
-  `docs/common-proposed/for-support-ticket-create-consent.md`. Wingman ships the flow now, with the hold
-  turned into a fixed instruction to the model, rather than waiting or sending `skipAutoReply` to dodge
-  the rail (the requester email is part of filing a ticket, not a side effect to suppress).
+  gate and its hold is answered by asking the person again, never by a retry. The gateway (FastMCP's
+  OpenAPI director) forwards only the arguments the for-Support schema declares. When Wingman shipped the
+  flow (0.1.62) `consent` and `skipAutoReply` were not declared, so every live create was held at
+  for-Support; Wingman shipped anyway, with the hold turned into a fixed instruction to the model, rather
+  than waiting or sending `skipAutoReply` to dodge the rail (the requester email is part of filing a
+  ticket, not a side effect to suppress). for-Support declared both on 2026-09-05 at 20:47Z (WO#1970,
+  support.forit.io `772e032`, master run 33990748040; gateway support spec generation 3, hash
+  `6e673050cd748f26`; its proof FI-000236 was a gateway create with `skipAutoReply: true` and no outbound
+  email), so a confirming call from Wingman now reaches for-Support with the words and is created when
+  they pass. Wingman still never sends `skipAutoReply`.
 
 ### Consequences
 
@@ -580,8 +584,9 @@ model must never be the thing that decides a ticket may be filed.
   records the tool name and outcome as for every tool, never the ticket's content.
 - Proving it end to end needs a test tenant with a ForIT requester, because a create emails a real address
   and a hold pages Ben; filing a real customer's ticket is Ben's call, not a test.
-- for-Support: declare `consent` (and `skipAutoReply`) in the OpenAPI body schema for the create route,
-  so the gateway forwards them. Until then every confirming call from Wingman is held, by design.
+- for-Support declared `consent` and `skipAutoReply` in the OpenAPI body schema for the create route on
+  2026-09-05 (WO#1970), so the gateway forwards them. The end-to-end spoken proof (preview, "go ahead",
+  ticket number, filed-by line in the portal) needs the test tenant with a ForIT requester above.
 
 ## 012 — Wingman defines no knowledge base search of its own; it consumes for-Support's and cites the article
 
