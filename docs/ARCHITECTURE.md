@@ -27,7 +27,7 @@ root, `.ai/decisions.md`.
                                         ▼
                                    for-mcp gateway (Container App, MCP Streamable HTTP)
                                     support_listTickets · support_addTicketNote · forit_avops_search_flights
-                                    support_searchKbArticles · support_getKbArticle (once for-Support ships them)
+                                    support_searchKbArticles · support_getKbArticle (live since for-Support a24e57f, 2026-09-05)
                                     role check + audit under the signed-in person; tools/list narrows the catalog
 ```
 
@@ -47,7 +47,7 @@ root, `.ai/decisions.md`.
 2. **Capture.** Apple Speech transcribes on-device while the key is held; on release ScreenCaptureKit
    takes a JPEG of every display, labelled with its pixel size and which one holds the cursor.
 3. **Model turn.** `ClaudeAPI.streamTurn` POSTs the conversation to the relay's `/api/chat` with the
-   three allow-listed tool definitions. The relay checks the id_token (issuer, audience, signature,
+   allow-listed tool definitions (five in the catalog, narrowed to what the gateway's `tools/list` exposes). The relay checks the id_token (issuer, audience, signature,
    `@forit.io`), pins the model to its allow-list, adds the Anthropic key and streams the SSE back.
 4. **Tool loop** (`CompanionManager.runModelTurnWithGatewayTools`). If the model stops with `tool_use`,
    the app runs each call through `WingmanToolCatalog.prepareCall` (allow-list, argument policy, the

@@ -89,11 +89,17 @@ token). The relay forwards `tools` / `tool_use` / `tool_result` to Anthropic and
    provisioning tools through Wingman is the app's own static allow-list (section 3), which is why that list
    is compiled in and not configurable. Reported to the Commander 2026-09-04 as part of WO#1908.
    Owner: for-mcp.
-5. **The knowledge base read tools do not exist on for-Support / the gateway yet.** Wingman describes
-   `support_searchKbArticles` and `support_getKbArticle` to the model only once the gateway's `tools/list`
-   exposes them; until then the model is told that part is not connected. The contract for-Support has to
-   implement (two read-only bearer-authenticated routes on the admin API, auto-mounted by the gateway from
-   the OpenAPI spec) is `docs/common-proposed/for-support-kb-read-api.md`. The `forit` tenant's knowledge
-   base also holds no FL3XX articles today; the same document proposes seeding it from the `for-FL3XX`
-   mirror, which is a Ben decision (FL3XX's own help-centre text, staff-facing use only). Owner: for-Support
-   (routes, content), for-mcp (spec refresh).
+5. **Knowledge base read tools: routes and gateway mount shipped 2026-09-05; content is the open part.**
+   for-Support `a24e57f` added `GET /api/admin/kb/search` and opened `GET /api/admin/kb/{articleId}` to the
+   bearer path (published articles only, `404` otherwise; evidence for-Support `12ff392`,
+   `docs/evidence/2026-09-05-kb-read-api-for-wingman.md`). The gateway re-mounted the support family from the
+   spec and `tools/list` now carries 27 `support_*` tools including `support_searchKbArticles` and
+   `support_getKbArticle`, so Wingman describes both to the model. Verified from for-Wingman on 2026-09-05
+   through the gateway itself: a search on tenant `forit` answers `{tenant, total, articles}`, an unknown
+   tenant is `404`, an article read carries `tenant_slug` and `url`, an unknown id is `404`. The contract as
+   shipped is `docs/common-proposed/for-support-kb-read-api.md`. Still open: (a) the `forit` tenant holds
+   **no FL3XX articles**, so the model correctly says the knowledge base has nothing on that yet; seeding it
+   from the `for-FL3XX` mirror (curated set, for-FL3XX `46244dc`) is a Ben decision; (b) for-Support proved
+   the routes with the shared `SUPPORT_API_KEY` bearer only, which is the path the gateway uses today (gap 1),
+   so per-user scoping of KB reads arrives with WO#1908 like every other `support_*` call. Owner: Ben
+   (seeding decision), for-Support (import), for-mcp (WO#1908).

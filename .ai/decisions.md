@@ -212,6 +212,8 @@ Option 3.
 - **The catalog is narrowed to the gateway's `tools/list`** per account (cached 15 minutes). Until
   for-Support ships, the KB tools are simply not offered and the prompt tells the model to say that part is
   not connected. When the routes land and for-mcp refreshes its spec, they appear without an app release.
+  (That is what happened: for-Support shipped `a24e57f` on 2026-09-05, the gateway re-mounted the support
+  family from the spec, and both tools showed up in `tools/list` with no Wingman change.)
 - **The prompt** makes the KB the first stop for any "how do I / where is / why does" question about FL3XX or
   another supported system, requires naming the article, and forbids inventing an FL3XX procedure when the
   search comes back empty.

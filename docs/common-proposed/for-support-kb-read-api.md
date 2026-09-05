@@ -1,8 +1,12 @@
 # Proposal for for-Support: two read-only knowledge base routes for Wingman
 
-Status: **proposed** (written in for-Wingman on 2026-09-05; for-Support owns the implementation).
-Wingman already ships the client side (`Wingman/WingmanToolCatalog.swift`, decision `.ai/decisions.md` 003)
-and hides the two tools until the gateway's `tools/list` shows them, so nothing breaks while this is open.
+Status: **implemented** (written in for-Wingman on 2026-09-05; for-Support shipped it the same day at
+`a24e57f`, evidence `12ff392` `docs/evidence/2026-09-05-kb-read-api-for-wingman.md`, 17 tests in
+`src/__tests__/api/adminKbRead.test.ts`; the gateway re-mounted the support family from the spec and its
+`tools/list` shows both tools, 25 → 27 `support_*`). Wingman ships the client side
+(`Wingman/WingmanToolCatalog.swift`, decision `.ai/decisions.md` 003) and only describes the two tools while
+the gateway's `tools/list` shows them. Sections below are the contract as agreed; the "Verification once
+shipped" section records what was checked.
 
 ## Why
 
@@ -152,9 +156,19 @@ written to for-Support; the set is ready for the day Ben says yes.
 
 ## Verification once shipped
 
-1. `curl -H "Authorization: Bearer $SUPPORT_API_KEY" "https://support.forit.io/api/admin/kb/search?q=tsa&tenant=forit"` returns published articles only.
-2. `gateway_spec_refresh`, then `tools/list` on the gateway shows `support_searchKbArticles` and `support_getKbArticle`.
-3. In Wingman (signed in as ForIT staff): "how do I turn on TSA screening in FL3XX" → the model calls search, then get, names the article, and does not describe steps the article does not contain. With an empty KB the same question gets "the knowledge base has nothing on that yet".
+1. **Done by for-Support (2026-09-05, `12ff392`).** Bearer `401` / `400` / `404` controls, a published read `200`, a
+   draft read through the bearer `404`.
+2. **Done from for-Wingman (2026-09-05).** The gateway's `tools/list` carries `support_searchKbArticles` and
+   `support_getKbArticle` (27 `support_*` tools). Called through the gateway, read-only: `q=fl3xx`, `q=ticket`
+   and `q=password` on tenant `forit` answer `{tenant: "forit", total: 0, articles: []}` (no FL3XX content yet,
+   see below); `tenant=no-such-tenant` is `404 Tenant not found`; `support_getKbArticle` on a published `forit`
+   article answers the full row plus `tenant_slug` and `url`; an unknown id is `404 Article not found`.
+   One difference from the example above: the `url` for-Support builds is `https://forit.io/forit/kb/<slug>`,
+   not `https://support.forit.io/…`; Wingman passes it through, so the model cites whatever for-Support
+   considers the public address.
+3. **Pending, needs Ben's Mac.** In Wingman (signed in as ForIT staff): "how do I turn on TSA screening in
+   FL3XX" → the model calls search, then get, names the article, and does not describe steps the article does
+   not contain. With the KB as it is today the same question gets "the knowledge base has nothing on that yet".
 
 ## What Wingman already does with these
 
