@@ -17,6 +17,7 @@ struct CompanionPanelView: View {
     @ObservedObject private var vocabularyStore: WingmanVocabularyStore
     @ObservedObject private var inventoryAppStore: WingmanInventoryAppStore
     @ObservedObject private var usageSharingPreference: WingmanUsageSharingPreference
+    @ObservedObject private var loginItemPreference: WingmanLoginItemPreference
 
     /// The vocabulary list is collapsed by default so the panel stays short.
     @State private var isVocabularyExpanded = false
@@ -28,6 +29,7 @@ struct CompanionPanelView: View {
         self._vocabularyStore = ObservedObject(wrappedValue: companionManager.vocabularyStore)
         self._inventoryAppStore = ObservedObject(wrappedValue: companionManager.inventoryAppStore)
         self._usageSharingPreference = ObservedObject(wrappedValue: companionManager.usageSharingPreference)
+        self._loginItemPreference = ObservedObject(wrappedValue: companionManager.loginItemPreference)
     }
 
     var body: some View {
@@ -74,6 +76,9 @@ struct CompanionPanelView: View {
                     usageSharingToggleRow
                         .padding(.horizontal, 16)
                 }
+
+                openAtLoginToggleRow
+                    .padding(.horizontal, 16)
 
                 if !inventoryAppStore.apps.isEmpty {
                     appsSection
@@ -816,6 +821,36 @@ struct CompanionPanelView: View {
         .tint(DS.Colors.accent)
         .scaleEffect(0.8)
         .pointerCursor()
+    }
+
+    /// "Open at Login" (decision 017), under the usage switch. On by default; the same choice is
+    /// also in System Settings > General > Login Items.
+    private var openAtLoginToggleRow: some View {
+        HStack {
+            HStack(spacing: 8) {
+                Image(systemName: "power.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .frame(width: 16)
+
+                Text(WingmanLoginItemPreference.switchLabel)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { loginItemPreference.isEnabled },
+                set: { companionManager.setOpenAtLoginEnabled($0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .tint(DS.Colors.accent)
+            .scaleEffect(0.8)
+            .pointerCursor()
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Model Picker
