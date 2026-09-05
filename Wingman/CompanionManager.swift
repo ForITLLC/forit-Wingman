@@ -71,6 +71,21 @@ final class CompanionManager: ObservableObject {
     /// panel). Applied on this Mac to speech recognition, the transcript, the prompt and the voice.
     let vocabularyStore = WingmanVocabularyStore()
 
+    /// The applications the launcher may open (`WingmanLauncher.swift`): scanned from the
+    /// Applications folders off the main thread at launch, and again on key-down once the scan is
+    /// ten minutes old. Empty until the first scan finishes.
+    private var installedApplicationCatalog = WingmanInstalledApplicationCatalog.empty
+    private var installedApplicationScanTask: Task<Void, Never>?
+    private static let installedApplicationCatalogMaximumAge: TimeInterval = 10 * 60
+
+    /// The ForIT and client sites from the Support inventory (`WingmanInventoryApps.swift`),
+    /// fetched through the gateway after sign-in and hourly, the same way the vocabulary is.
+    let inventoryAppStore = WingmanInventoryAppStore()
+    private var inventoryAppsRefreshTask: Task<Void, Never>?
+    private var inventoryAppsRefreshLastAttemptAt: Date?
+    private static let inventoryAppsMaximumAge: TimeInterval = 60 * 60
+    private static let inventoryAppsRefreshRetryInterval: TimeInterval = 5 * 60
+
     /// Whether this Mac shares each turn's usage with ForIT (on unless switched off in the panel)
     /// and whether the person has seen the disclosure. See WingmanUsageSharing.swift.
     let usageSharingPreference = WingmanUsageSharingPreference()
@@ -242,6 +257,7 @@ final class CompanionManager: ObservableObject {
 
         // Pick the previous sign-in back up from the keychain-held refresh token.
         Task { await signInManager.restoreSessionIfPossible() }
+        rescanInstalledApplicationsIfStale()
 
         // If the user already completed onboarding AND all permissions are
         // still granted, show the cursor overlay immediately. If permissions
@@ -498,6 +514,8 @@ final class CompanionManager: ObservableObject {
             claudeAPI.warmUpRelay()
             refreshGatewayToolListIfStale()
             refreshVocabularyFromForITSupportIfStale()
+            refreshInventoryAppsFromForITSupportIfStale()
+            rescanInstalledApplicationsIfStale()
 
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
@@ -586,6 +604,7 @@ final class CompanionManager: ObservableObject {
             .sink { [weak self] signInState in
                 guard case .signedIn = signInState else { return }
                 self?.refreshVocabularyFromForITSupportIfStale()
+                self?.refreshInventoryAppsFromForITSupportIfStale()
             }
     }
 
@@ -647,6 +666,60 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    // MARK: - Inventory apps
+
+    /// Starts a background fetch of the Support inventory's apps when the stored list is due and no
+    /// fetch is running or has just failed. Same shape as the vocabulary refresh: never on a spoken
+    /// turn's critical path.
+    private func refreshInventoryAppsFromForITSupportIfStale() {
+        guard signInManager.isSignedIn, inventoryAppsRefreshTask == nil else { return }
+        guard inventoryAppStore.isDueForRefresh(maximumAge: Self.inventoryAppsMaximumAge) else { return }
+        if let lastAttemptAt = inventoryAppsRefreshLastAttemptAt,
+           Date().timeIntervalSince(lastAttemptAt) < Self.inventoryAppsRefreshRetryInterval {
+            return
+        }
+        inventoryAppsRefreshLastAttemptAt = Date()
+        inventoryAppsRefreshTask = Task { [weak self] in
+            await self?.fetchInventoryAppsFromForITSupport()
+            self?.inventoryAppsRefreshTask = nil
+        }
+    }
+
+    /// One fetch of the active inventory apps. Skips quietly when the gateway does not expose the
+    /// tool; a failure (the upstream key rejected with a 401, say) is logged with a stable label and
+    /// the stored list stays. The model never sees this tool: it gets the sites in the prompt.
+    private func fetchInventoryAppsFromForITSupport() async {
+        if let refreshAlreadyRunning = gatewayToolListRefreshTask {
+            await refreshAlreadyRunning.value
+        } else if !isCachedGatewayToolListUsable {
+            await fetchGatewayToolList()
+        }
+        guard let exposedToolNames = gatewayExposedToolNames else { return }
+        guard exposedToolNames.contains(WingmanInventoryApps.foritSupportToolName) else {
+            print("ℹ️ Gateway does not expose \(WingmanInventoryApps.foritSupportToolName); keeping the stored inventory apps")
+            return
+        }
+
+        do {
+            let result = try await gatewayToolClient.callTool(
+                named: WingmanInventoryApps.foritSupportToolName,
+                arguments: WingmanInventoryApps.toolArguments
+            )
+            guard !result.isError else {
+                WingmanAnalytics.trackInventoryAppsRefreshFailed(reason: WingmanGatewayToolClient.failureOutcomeLabel(forErrorResultText: result.text))
+                return
+            }
+            guard let fetchedApps = WingmanInventoryApps.apps(fromForITSupportResultText: result.text) else {
+                WingmanAnalytics.trackInventoryAppsRefreshFailed(reason: "unexpected_result_shape")
+                return
+            }
+            inventoryAppStore.replaceWithAppsFromForITSupport(fetchedApps, fetchedAt: Date())
+            WingmanAnalytics.trackInventoryAppsRefreshed(appCount: fetchedApps.count)
+        } catch {
+            WingmanAnalytics.trackInventoryAppsRefreshFailed(reason: Self.vocabularyRefreshFailureReason(for: error))
+        }
+    }
+
     /// A stable label for the log, never the gateway's text.
     private static func vocabularyRefreshFailureReason(for error: Error) -> String {
         guard let gatewayError = error as? WingmanGatewayToolError else { return "gateway_unreachable" }
@@ -664,9 +737,13 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// The system prompt for this turn: the fixed companion prompt plus the vocabulary.
+    /// The system prompt for this turn: the fixed companion prompt, the vocabulary, and the
+    /// launcher's rules with the applications installed on this Mac.
     private var voiceSystemPromptForThisTurn: String {
-        Self.companionVoiceResponseSystemPrompt + vocabularyStore.vocabulary.systemPromptSection()
+        Self.companionVoiceResponseSystemPrompt
+            + vocabularyStore.vocabulary.systemPromptSection()
+            + WingmanLauncher.systemPromptSection(installedApplications: installedApplicationCatalog)
+            + WingmanInventoryApps.systemPromptSection(apps: inventoryAppStore.apps)
     }
 
     // MARK: - Companion Prompt
@@ -993,7 +1070,12 @@ final class CompanionManager: ObservableObject {
 
             var toolResultBlocks: [[String: Any]] = []
             for toolUse in streamedTurn.toolUses {
-                let outcome = await executeGatewayTool(toolUse, spokenTranscript: transcript, usageRecorder: usageRecorder)
+                let outcome: GatewayToolOutcome
+                if toolUse.name == WingmanLauncher.toolName {
+                    outcome = await executeLauncherTool(toolUse, usageRecorder: usageRecorder)
+                } else {
+                    outcome = await executeGatewayTool(toolUse, spokenTranscript: transcript, usageRecorder: usageRecorder)
+                }
                 guard !Task.isCancelled else { throw CancellationError() }
                 switch outcome {
                 case .accessProblem(let spokenReply, let panelMessage):
@@ -1062,10 +1144,11 @@ final class CompanionManager: ObservableObject {
     }
 
     /// The tool definitions for this turn: the catalog narrowed to what the gateway's `tools/list`
-    /// exposes to the signed-in person. The list is cached per account and refreshed after
-    /// `gatewayToolListMaximumAge`, so a tool for-Support ships later shows up without restarting
-    /// the app. A failed `tools/list` is logged and the whole catalog is offered instead, so a
-    /// gateway hiccup costs at most a "that failed" on one tool, never the spoken question.
+    /// exposes to the signed-in person, plus the launcher tool the app runs itself. The list is
+    /// cached per account and refreshed after `gatewayToolListMaximumAge`, so a tool for-Support
+    /// ships later shows up without restarting the app. A failed `tools/list` is logged and the
+    /// whole catalog is offered instead, so a gateway hiccup costs at most a "that failed" on one
+    /// tool, never the spoken question.
     private func toolDefinitionsForThisTurn() async -> [[String: Any]] {
         if let refreshAlreadyRunning = gatewayToolListRefreshTask {
             // Started when the key went down; usually finished by now.
@@ -1073,7 +1156,10 @@ final class CompanionManager: ObservableObject {
         } else if !isCachedGatewayToolListUsable {
             await fetchGatewayToolList()
         }
+        // The launcher needs no gateway and no sign-in beyond the push-to-talk gate, so it is
+        // always offered, after the gateway tools.
         return WingmanToolCatalog.modelToolDefinitions(exposedByGateway: gatewayExposedToolNames)
+            + [WingmanLauncher.modelToolDefinition]
     }
 
     /// Whether the cached `tools/list` belongs to the signed-in account and is young enough.
@@ -1120,6 +1206,40 @@ final class CompanionManager: ObservableObject {
         } else if WingmanToolCatalog.isCreatedTicketResult(resultText) {
             pendingTicketPreview = nil
             print("🎫 Ticket filed")
+        }
+    }
+
+    /// Runs the one tool the app executes itself, `open_on_this_mac` (`WingmanLauncher.swift`).
+    /// Nothing leaves the Mac, so there is no gateway policy, access level or session to handle;
+    /// the usage report and the Mac log see it as a tool call with a stable outcome label, never
+    /// the name or address it opened.
+    private func executeLauncherTool(_ toolUse: ClaudeToolUseRequest, usageRecorder: WingmanTurnUsageRecorder) async -> GatewayToolOutcome {
+        WingmanAnalytics.trackToolCalled(toolName: WingmanLauncher.toolName)
+        let outcome = await WingmanLauncher.perform(toolInput: toolUse.input, installedApplications: installedApplicationCatalog)
+        usageRecorder.noteToolCall(name: WingmanLauncher.toolName, searchTerms: nil, outcome: outcome.isError ? .error : .ok)
+        if outcome.isError {
+            WingmanAnalytics.trackToolFailed(toolName: WingmanLauncher.toolName, outcome: outcome.analyticsOutcomeLabel)
+            print("⚠️ Launcher: \(outcome.resultText)")
+        } else {
+            print("🚀 Launcher: \(outcome.resultText)")
+        }
+        return .result(text: outcome.resultText, isError: outcome.isError)
+    }
+
+    /// Scans the Applications folders off the main thread when the catalog is ten minutes old and
+    /// no scan is running. Called at launch and on key-down, never on a spoken turn's critical
+    /// path: a turn uses whatever the last scan found.
+    private func rescanInstalledApplicationsIfStale() {
+        guard installedApplicationCatalog.isDueForRescan(maximumAge: Self.installedApplicationCatalogMaximumAge),
+              installedApplicationScanTask == nil
+        else { return }
+        installedApplicationScanTask = Task { [weak self] in
+            let scannedCatalog = await Task.detached(priority: .utility) {
+                WingmanInstalledApplicationCatalog.scan()
+            }.value
+            self?.installedApplicationCatalog = scannedCatalog
+            self?.installedApplicationScanTask = nil
+            print("🚀 Launcher: \(scannedCatalog.applications.count) installed applications")
         }
     }
 

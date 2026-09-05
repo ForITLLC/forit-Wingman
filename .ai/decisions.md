@@ -740,3 +740,58 @@ dialog nobody had answered yet held the panel and the Sparkle start behind it.
   when it lands, this decision is superseded by a one-line change to the store.
 - Every ForIT Mac on the Jamf package gets this with the next release through Sparkle; a Mac
   that had never signed in has no old item and sees no dialog at all.
+
+## 015 — Wingman is a launcher: one local tool opens installed apps and web addresses, and the Support inventory supplies the ForIT and client sites
+
+**Date:** 2026-09-05
+**Status:** Accepted (the inventory half waits on for-Support WO#1979)
+
+### Context
+
+Ben, 2026-09-05: "do we want to make this like a launcher too? Because it'll have like all the
+apps, like inventory should contain all the DNS for all sites." Then: "Makes sense to me. It also
+means that for support should ask for inventory to make sure that every URL is documented as an
+attribute on both client and for IT apps." And: "it would be nice to be able to be like, browse to
+whatever, and it'll open up the default browser and do it. And then also have a list of the apps on
+the computer, and basically do it for them too. If that doesn't require too many permissions."
+
+Until now every tool the model could call ran on the gateway; Wingman itself did nothing on the
+Mac but capture, point and speak.
+
+### Decision
+
+- One tool runs on the Mac: `open_on_this_mac` (`WingmanLauncher.swift`), always offered after the
+  gateway tools, never seen by `WingmanToolCatalog` and never sent anywhere. It opens exactly one
+  of an installed application, by name, or a web address in the default browser. It never types,
+  clicks, signs in, opens a file or runs anything else.
+- An application must be one Wingman found in the Applications folders (`/Applications` and its
+  Utilities, `/System/Applications` and its Utilities, `~/Applications`), scanned off the main thread
+  at launch and on key-down once the scan is ten minutes old. The installed names go into the
+  system prompt; the tool matches what the model passes (exact name, folder name, a whole word,
+  a prefix of three letters or more; the shortest name wins) and suggests close names when nothing
+  matches. Nothing outside those folders is ever launched.
+- A web address is http or https only, with a real host and no sign-in details in it; a bare site
+  name gets `https://` and "dot" as speech transcribes it becomes ".". The prompt has the model say
+  which address it opened, so a wrong guess is heard.
+- The ForIT and client sites come from the Support inventory: `support_listInventoryApps` (active
+  apps) fetched after sign-in and hourly, the same way the vocabulary is, never described to the
+  model. Apps with a `url` are listed in the prompt ("AVHR (XcelJet) https://avhr.xceljet.com") so
+  "open the XcelJet AVHR site" becomes a tool call with that address, and in the panel's Apps
+  section with an Open button, grouped by owner with ForIT first. Apps without a url are left out
+  and the section is hidden while the list is empty. The url attribute and the gateway key that
+  the route rejects today are for-Support's (proposal
+  `docs/common-proposed/for-support-inventory-app-url.md`, WO#1979).
+- No new macOS permission: reading the Applications folders and asking the workspace to open
+  something prompt for nothing.
+
+### Consequences
+
+- The model gets two more prompt sections every turn: up to 200 installed application names and
+  up to 100 inventory sites. Both are cached by the relay's prompt caching with the rest of the
+  system prompt.
+- The usage report and the Mac log see the launcher as a tool call with a stable outcome label
+  (`opened_application`, `application_not_installed`, `address_refused`, `open_failed`), never the
+  name or address opened.
+- Until for-Support ships the url attribute and the key fix, the inventory half is dormant: the
+  fetch logs `inventory_apps_refresh_failed reason=tool_error_http_401` hourly and the Apps section
+  does not appear. Installed apps and spoken addresses work now.

@@ -162,6 +162,17 @@ enum WingmanAnalytics {
         recordProblem("vocabulary_refresh_failed", properties: ["reason": reason])
     }
 
+    /// ForIT Support's inventory app list was fetched and replaced the stored one.
+    static func trackInventoryAppsRefreshed(appCount: Int) {
+        recordMilestone("inventory_apps_refreshed", properties: ["apps": String(appCount)])
+    }
+
+    /// The inventory fetch failed and the stored list stays. `reason` is a stable label (a
+    /// `tool_error_http_401` while the gateway's key is rejected, say), never the response.
+    static func trackInventoryAppsRefreshFailed(reason: String) {
+        recordProblem("inventory_apps_refresh_failed", properties: ["reason": reason])
+    }
+
     /// The person flipped the "Share usage with ForIT" switch in the panel.
     static func trackUsageSharingChanged(enabled: Bool) {
         recordMilestone("usage_sharing_changed", properties: ["enabled": String(enabled)])
