@@ -213,8 +213,19 @@ jobs:
         run: |
           APP=build/DerivedData/Build/Products/Release/Wingman.app
           PKG_NAME="Wingman-$APP_VERSION.pkg"
+          PKG_ROOT=build/pkg-root
+          rm -rf "$PKG_ROOT" && mkdir -p "$PKG_ROOT"
+          cp -R "$APP" "$PKG_ROOT/"
           chmod +x packaging/pkg-scripts/postinstall
-          pkgbuild --component "$APP" \
+          # Installer "relocates" a bundle it considers relocatable onto any existing copy with the
+          # same bundle id anywhere on the disk (here the DerivedData copy the smoke test launched; on
+          # a Mac, a stray copy in Downloads), and pkgbuild marks app bundles relocatable by default.
+          # The component plist pins the install to /Applications.
+          pkgbuild --analyze --root "$PKG_ROOT" build/pkg-component.plist
+          /usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" build/pkg-component.plist
+          /usr/libexec/PlistBuddy -c "Print :0:BundleIsRelocatable" build/pkg-component.plist | grep -qx false
+          pkgbuild --root "$PKG_ROOT" \
+            --component-plist build/pkg-component.plist \
             --install-location /Applications \
             --identifier io.forit.wingman.pkg \
             --version "$APP_VERSION" \
@@ -223,7 +234,8 @@ jobs:
           echo "pkg_name=$PKG_NAME" >> "$GITHUB_OUTPUT"
           ls -la "build/$PKG_NAME"
           sudo installer -pkg "build/$PKG_NAME" -target / -verboseR 2>&1 | tail -5
-          test -d /Applications/Wingman.app
+          pkgutil --files io.forit.wingman.pkg | head -3
+          ls -d /Applications/Wingman.app
           codesign --verify --deep --strict /Applications/Wingman.app
           /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" /Applications/Wingman.app/Contents/Info.plist | grep -qx "$APP_VERSION"
           pkgutil --pkg-info io.forit.wingman.pkg
