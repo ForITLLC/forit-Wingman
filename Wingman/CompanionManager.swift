@@ -169,6 +169,10 @@ final class CompanionManager: ObservableObject {
     /// terminates once the goodbye of that turn has been spoken. A new turn clears it.
     private var quitRequestedByVoice = false
 
+    /// Whether a voice quit is pending (decision 017). The updater reads it before installing a
+    /// staged update while idle (decision 020): that quit installs the update on its own.
+    var isQuitPendingByVoice: Bool { quitRequestedByVoice }
+
     /// Cuts the reply into sentences for text-to-speech while it streams. Reset for every model
     /// call; held here (not in a local) because the stream callback is @Sendable and cannot
     /// mutate a captured local.
