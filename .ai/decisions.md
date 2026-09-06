@@ -951,7 +951,7 @@ the next look was not until 23:08Z. A check that lands in a network blip cost a 
 
 ### Decision
 
-- The app delegate gives Sparkle an updater delegate (`WingmanUpdateCheckRetryDelegate`). When a
+- The app delegate gives Sparkle an updater delegate (`WingmanUpdateCheckRetryDelegate`, since decision 020 `WingmanUpdaterDelegate`). When a
   background check ends with a Sparkle appcast or download error, or anything with a URL loading
   error underneath, it asks Sparkle for another background check five minutes later. One retry is
   pending at a time; a retry that fails again schedules the next.
@@ -965,3 +965,35 @@ the next look was not until 23:08Z. A check that lands in a network blip cost a 
 - An outage of hours costs one small request every five minutes.
 - Nothing changes for a person: the retry is silent, and the install still happens at the next
   quit as before.
+
+## 020 — A downloaded update is installed as soon as Wingman is idle, not at the next quit
+
+### Context
+
+Ben, 2026-09-05 23:50Z: "I still have a model selector. So you haven't managed to get this to my
+MacBook." His MacBook had run 0.1.68 since 21:09Z. The hourly check at 23:08Z had worked, downloaded
+0.1.86 and staged it under Sparkle's Installation cache; with "automatically download and install"
+on, Sparkle installs a staged update when the app terminates, and a menu bar app that opens at
+login is never quit. Every fix shipped that evening was on his Mac and none of it was running.
+
+### Decision
+
+- The updater delegate takes over Sparkle's install-on-quit
+  (`updater(_:willInstallUpdateOnQuit:immediateInstallationBlock:)` returns true) and calls the
+  immediate install the first moment Wingman is idle, checking every fifteen seconds until then.
+  Sparkle installs with no UI and relaunches the app.
+- Idle (`WingmanIdleUpdateInstall.isSafeToInstallNow`) means: the voice state is `idle` (no
+  listening, thinking or speaking under way), no sign-in is waiting on the browser, and no voice
+  quit is pending (that quit installs the update the way Sparkle always did).
+- The relaunch loses nothing a person can see: the panel closes, the conversation history was
+  never persisted, and the sign-in comes back from the keychain.
+- The Mac log gets `update_installed_while_idle version=<new>` at notice level as the last line
+  of the old build, so `log show` explains a relaunch.
+
+### Consequences
+
+- A release reaches a running Wingman within the check interval plus the download, with no
+  action by the person, and a quit is no longer part of getting an update.
+- A person who is mid-sentence is never cut off; the install waits.
+- Sparkle's own "update ready, install on quit" reminder path is bypassed, which is the point.
+

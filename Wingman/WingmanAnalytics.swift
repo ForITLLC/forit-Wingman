@@ -173,6 +173,13 @@ enum WingmanAnalytics {
         recordMilestone("update_check_retry_scheduled", properties: ["delay_s": String(delaySeconds)])
     }
 
+    /// A downloaded update is being installed now, while Wingman is idle, with a relaunch
+    /// (decision 020). Logged just before Sparkle takes over, so it is the last line this build
+    /// writes.
+    static func trackUpdateInstalledWhileIdle(version: String) {
+        recordMilestone("update_installed_while_idle", properties: ["version": version])
+    }
+
     /// App feedback reached the ForIT board as a story (decision 016). The story's number is
     /// public so `log show` can prove which story a spoken piece of feedback became; the feedback
     /// itself is never logged.

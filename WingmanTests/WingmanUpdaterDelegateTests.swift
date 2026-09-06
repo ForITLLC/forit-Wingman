@@ -1,9 +1,9 @@
 //
-//  WingmanUpdateRetryTests.swift
+//  WingmanUpdaterDelegateTests.swift
 //  WingmanTests
 //
-//  Covers which failed update checks are retried soon (decision 019): a feed or download failure
-//  and anything with a URL loading error underneath, never "no update" or an installation problem.
+//  Covers the two pure rules behind the updater delegate: which failed update checks are retried
+//  soon (decision 019), and when a staged update may be installed with a relaunch (decision 020).
 //
 
 import Foundation
@@ -43,5 +43,32 @@ struct WingmanUpdateRetryTests {
 
     @Test func theRetryWaitsMinutesNotAnHour() {
         #expect(WingmanUpdateCheckRetry.delayAfterNetworkFailure == 300)
+    }
+}
+
+struct WingmanIdleUpdateInstallTests {
+    private let signedIn = WingmanSignInState.signedIn(WingmanSignedInAccount(displayName: "Ben Thomas", emailAddress: "b.thomas@forit.io"))
+
+    @Test func anIdleSignedInAppInstallsNow() {
+        #expect(WingmanIdleUpdateInstall.isSafeToInstallNow(voiceState: .idle, signInState: signedIn, quitPendingByVoice: false))
+        #expect(WingmanIdleUpdateInstall.isSafeToInstallNow(voiceState: .idle, signInState: .signedOut, quitPendingByVoice: false))
+    }
+
+    @Test func aTurnInProgressWaits() {
+        #expect(!WingmanIdleUpdateInstall.isSafeToInstallNow(voiceState: .listening, signInState: signedIn, quitPendingByVoice: false))
+        #expect(!WingmanIdleUpdateInstall.isSafeToInstallNow(voiceState: .processing, signInState: signedIn, quitPendingByVoice: false))
+        #expect(!WingmanIdleUpdateInstall.isSafeToInstallNow(voiceState: .responding, signInState: signedIn, quitPendingByVoice: false))
+    }
+
+    @Test func aSignInWaitingOnTheBrowserWaits() {
+        #expect(!WingmanIdleUpdateInstall.isSafeToInstallNow(voiceState: .idle, signInState: .signingIn, quitPendingByVoice: false))
+    }
+
+    @Test func aPendingVoiceQuitLeavesTheInstallToThatQuit() {
+        #expect(!WingmanIdleUpdateInstall.isSafeToInstallNow(voiceState: .idle, signInState: signedIn, quitPendingByVoice: true))
+    }
+
+    @Test func theIdleCheckRepeatsEveryFifteenSeconds() {
+        #expect(WingmanIdleUpdateInstall.pollInterval == 15)
     }
 }

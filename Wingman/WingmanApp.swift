@@ -31,9 +31,10 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarPanelManager: MenuBarPanelManager?
     private let companionManager = CompanionManager()
     private var sparkleUpdaterController: SPUStandardUpdaterController?
-    /// Retries a background update check that failed on the network (decision 019). Sparkle
-    /// holds its delegate weakly, so this object lives here.
-    private let updateCheckRetryDelegate = WingmanUpdateCheckRetryDelegate()
+    /// Retries a background update check that failed on the network (decision 019) and installs
+    /// a downloaded update as soon as Wingman is idle (decision 020). Sparkle holds its delegate
+    /// weakly, so this object lives here.
+    private let updaterDelegate = WingmanUpdaterDelegate()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🎯 Wingman: Starting...")
@@ -63,9 +64,18 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startSparkleUpdater() {
+        // A staged update relaunches the app, so it waits for a moment when nothing is being
+        // heard, answered or signed in (decision 020).
+        updaterDelegate.isSafeToInstallUpdateNow = { [companionManager] in
+            WingmanIdleUpdateInstall.isSafeToInstallNow(
+                voiceState: companionManager.voiceState,
+                signInState: companionManager.signInManager.signInState,
+                quitPendingByVoice: companionManager.isQuitPendingByVoice
+            )
+        }
         let updaterController = SPUStandardUpdaterController(
             startingUpdater: false,
-            updaterDelegate: updateCheckRetryDelegate,
+            updaterDelegate: updaterDelegate,
             userDriverDelegate: nil
         )
         self.sparkleUpdaterController = updaterController
